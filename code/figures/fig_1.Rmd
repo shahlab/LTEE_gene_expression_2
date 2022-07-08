@@ -1,0 +1,719 @@
+---
+title: "Figure 1"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+```{r}
+library(tidyverse)
+library(patchwork)
+library(broom)
+library(scales)
+library(ggpubr)
+library(parallel)
+library(png)
+library(grid)
+library(sinib)
+```
+
+```{r}
+mut.levels <- read_csv("../../data_frames/all_data.csv") %>%
+  select(line, mutator) %>%
+  arrange(mutator, line) %>%
+  unique() %>%
+  pull(line)
+
+mut.colors <- c(rep("black", 6), rep("firebrick3", 5))
+
+ddf <- read_csv("../../data_frames/table_s2_fold_changes.csv") %>%
+  filter(seqtype == "rna") %>%
+  mutate(line = factor(line, levels = mut.levels))
+
+all.data <- read_csv("../../data_frames/all_data.csv") %>%
+  filter(gene_type == "ECB")
+
+# these are the mutator lines
+mut.lines <- all.data %>% 
+  filter(mutator == TRUE) %>% 
+  pull(line) %>% 
+  unique()
+
+# get the e coli proteins only
+ecb.genes <- unique(all.data$target_id)
+
+# Removes ERCC and tRNA genes from the data
+kdf <- read_csv("../../data_frames/table_s1_read_counts.csv") %>%
+  filter(target_id %in% ecb.genes)
+```
+
+Define the set of genes that were significant in any one line.
+```{r}
+sig.genes <- ddf %>%
+  filter(padj <= .01) %>%
+  pull(target_id) %>%
+  unique()
+```
+
+A list of genes that were significant in a specific line.
+```{r}
+sigs.per.line <- ddf %>%
+  filter(padj <= .01) %>%
+  split(.$line) %>%
+  map(.f = pull, target_id)
+
+# add both ancestors to the list, but with no genes. This is so when a
+# comparison between evo:anc comes up, only evo genes will be used as the
+# significant set
+sigs.per.line$"REL606" <- NA
+sigs.per.line$"REL607" <- NA
+```
+
+### Panel A
+
+The schematic figure
+```{r}
+png.a <-
+  rasterGrob(readPNG("../figures/schematic_figure.png"), interpolate = TRUE)
+
+# this is simply a dummy plot to hold the picture in
+cartoon <- ggplot(mtcars, aes(hp, mpg)) +
+  annotation_custom(
+    grob = png.a,
+    xmin = -Inf,
+    xmax = Inf,
+    ymin = -Inf,
+    ymax = Inf
+  ) +
+  labs(x = NULL, y = NULL, title = "A") +
+  theme_void() +
+  theme(text = element_text(size = 13))
+
+cartoon
+```
+
+### Panel B
+
+Boxplot showing differences in TPMs as a function of who is being compared to who. If the pairwise comparison is between two evolved lines, then it uses the union of the significant genes between the two as the significant set. If it's between an ancestor and an evolved line, then it uses the significant genes in the one evolved line as the significant set. 
+
+Average the TPMs across reps and log10 them
+```{r}
+mean.tpms <- kdf %>%
+  filter(seqtype == "rna") %>%
+  group_by(line, target_id) %>%
+  summarise(mean_tpm = mean(tpm)) %>%
+  ungroup() %>%
+  mutate(mean_tpm = ifelse(mean_tpm != 0, log10(mean_tpm), NA))
+```
+
+Run all possible pairs of lines
+```{r}
+combos <- combn(unique(mean.tpms$line), m = 2, simplify = FALSE)
+```
+
+Do comparisons for all genes TPMs
+```{r}
+all.genes.cors <- lapply(combos, function(x) {
+  # get the TPMs for the two lines in question
+  tpms <- mean.tpms %>%
+    filter(line %in% x) %>%
+    pivot_wider(names_from = line, values_from = mean_tpm)
+  
+  # turn them to vectors
+  t1 <- pull(tpms, x[1])
+  t2 <- pull(tpms, x[2])
+  
+  # run the correlation test and add some columns, the who column specifies
+  # anc:evo or evo:evo
+  cor.test(t1, t2, method = "spearman") %>%
+    tidy() %>%
+    mutate(
+      line1 = x[1],
+      line2 = x[2],
+      type = "All genes",
+      who = ifelse(
+        grepl("REL", line1) | grepl("REL", line2),
+        "anc:evo",
+        "evo:evo"
+      )
+    )
+}) %>%
+  bind_rows()
+
+head(all.genes.cors)
+```
+
+Then comparisons involving the union of significant genes
+```{r}
+# this one can't use the anc:anc pair because there is no significant genes
+no.anc.anc.combos <-
+  combos[!(grepl("REL606", combos) & grepl("REL607", combos))]
+
+sig.genes.cors <- lapply(no.anc.anc.combos, function(x) {
+  # find the union of the significant genes
+  u.genes <- union(sigs.per.line[[x[1]]],
+                   sigs.per.line[[x[2]]]) %>%
+    na.omit()
+  
+  # get the TPMs for the two lines in question, only keep significant set genes
+  tpms <- mean.tpms %>%
+    filter(line %in% x & target_id %in% u.genes) %>%
+    pivot_wider(names_from = line, values_from = mean_tpm)
+  
+  # turn them to vectors
+  t1 <- pull(tpms, x[1])
+  t2 <- pull(tpms, x[2])
+  
+  # run the correlation test and add some columns, the who column specifies
+  # anc:evo or evo:evo
+  cor.test(t1, t2, method = "spearman") %>%
+    tidy() %>%
+    mutate(
+      line1 = x[1],
+      line2 = x[2],
+      type = "Differentially\nexpressed",
+      who = ifelse(
+        grepl("REL", line1) | grepl("REL", line2),
+        "anc:evo",
+        "evo:evo"
+      )
+    )
+}) %>%
+  bind_rows()
+
+head(sig.genes.cors)
+```
+
+```{r}
+all.cors.b <- bind_rows(all.genes.cors, sig.genes.cors)
+```
+
+KS test those distributions
+```{r}
+ks.res <- all.cors.b %>%
+  split(.$type) %>%
+  map(function(x) {
+    evoevo <- x[x$who == "evo:evo",]$estimate
+    
+    ancevo <- x[x$who == "anc:evo",]$estimate
+    
+    ks.test(evoevo, ancevo) %>%
+      broom::tidy()
+  }) %>%
+  bind_rows(.id = "type") %>%
+  mutate(labz = paste("p =", signif(p.value, 2)))
+```
+
+```{r}
+pb <- all.cors.b %>%
+  ggplot(., aes(type, estimate, color = who)) +
+  geom_boxplot(outlier.colour = NA) +
+  geom_jitter(
+    position = position_jitterdodge(jitter.height = 0, jitter.width = .2),
+    size = .75,
+    alpha = .5
+  ) +
+  scale_color_manual(values = c("royalblue", "goldenrod"), name = NULL) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 14),
+    panel.grid = element_blank(),
+    legend.position = c(.27, .12),
+    legend.background = element_blank(),
+    axis.title.x = element_blank()
+  ) +
+  labs(x = NULL,
+       y = expression(paste( ~ rho, " of ", log[10], "(TPM)", sep = "")),
+       title = "B") +
+  geom_text(inherit.aes = FALSE,
+            data = ks.res,
+            aes(type, y = 1.05, label = labz))
+
+pb
+```
+
+### Panel C
+
+Correlations based on fold changes, again for the union of significant genes between each pairwise comparison
+```{r}
+evo.pairs <- combn(unique(ddf$line), m = 2, simplify = FALSE)
+
+all.cors.c <- lapply(evo.pairs, function(x) {
+  # all fold changes
+  all.fc <- ddf %>%
+    filter(line %in% x) %>%
+    select(line, target_id, log2FoldChange) %>%
+    pivot_wider(names_from = line, values_from = log2FoldChange)
+  
+  # union of sig genes
+  sig.union <- union(sigs.per.line[[x[1]]],
+                     sigs.per.line[[x[2]]])
+  
+  # the sig fold changes
+  sig.fc <- ddf %>%
+    filter(line %in% x & target_id %in% sig.union) %>%
+    select(line, target_id, log2FoldChange) %>%
+    pivot_wider(names_from = line, values_from = log2FoldChange)
+  
+  # calculate correlations
+  sig.cors <- cor.test(pull(sig.fc, x[1]),
+                       pull(sig.fc, x[2]),
+                       method = "spearman") %>%
+    tidy() %>%
+    mutate(line1 = x[1],
+           line2 = x[2],
+           set = "Differentially\nexpressed")
+  
+  all.cors <- cor.test(pull(all.fc, x[1]),
+                       pull(all.fc, x[2]),
+                       method = "spearman") %>%
+    tidy() %>%
+    mutate(line1 = x[1],
+           line2 = x[2],
+           set = "All genes")
+  
+  # join them
+  both.cors <- bind_rows(sig.cors, all.cors)
+}) %>%
+  bind_rows()
+
+all.cors.c
+```
+
+Run KS tests on the comparisons.
+```{r}
+fc.ks.res <- ks.test(all.cors.c[all.cors.c$set == "All genes",]$estimate,
+                     all.cors.c[all.cors.c$set == "Differentially\nexpressed",]$estimate)
+
+plabel <- paste("p =",
+                signif(fc.ks.res$p.value, 2))
+```
+
+```{r}
+pc <- all.cors.c %>%
+  ggplot(., aes(set, estimate)) +
+  geom_boxplot(outlier.color = NA) +
+  geom_jitter(
+    height = 0,
+    size = .75,
+    width = .25,
+    color = "grey20"
+  ) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        text = element_text(size = 14)) +
+  labs(y = expression(paste(rho, " of ", log[2], "(fold-change)", sep = "")),
+       x = NULL,
+       title = "C") +
+  annotate("text",
+           label = plabel,
+           x = 1.5,
+           y = .8)
+
+pc
+```
+
+### Panel D
+
+Heatmap of fold changes for the superset of significant genes.
+```{r}
+gene.order <- ddf %>%
+  filter(target_id %in% sig.genes) %>%
+  group_by(target_id) %>%
+  summarise(mean_fc = mean(log2FoldChange, na.rm = TRUE)) %>%
+  arrange(mean_fc) %>%
+  pull(target_id)
+```
+
+Scale labels
+```{r}
+threshold <- 3
+
+scale.labels <- c(paste("\u2264", paste0("-", threshold), sep = ""),
+                  "",
+                  0,
+                  "",
+                  paste("\u2265", threshold, sep = ""))
+```
+
+The df for the plot
+```{r}
+pd.df <- ddf %>%
+  filter(seqtype == "rna" & target_id %in% sig.genes) %>%
+  mutate(
+    target_id = factor(target_id, levels = gene.order),
+    newfc = case_when(
+      log2FoldChange < -3 ~ -3,
+      log2FoldChange > 3 ~ 3,
+      is.na(log2FoldChange) | TRUE ~ log2FoldChange
+    )
+  ) %>% 
+  select(line, target_id, newfc)
+
+pd.df
+```
+
+Get clustering order to cluster line on the heatmap
+```{r}
+d.clust <- pd.df %>% 
+  pivot_wider(names_from = target_id, values_from = newfc) %>% 
+  column_to_rownames("line") %>% 
+  dist() %>% 
+  hclust()
+
+d.line.order <- setNames(d.clust$order, d.clust$labels) %>% 
+  sort() %>% 
+  names()
+
+pd.df$line <- factor(pd.df$line, d.line.order)
+```
+
+Get the correct colors for the labels
+```{r}
+d.colors <- sapply(d.line.order, function(x){
+  if (x %in% mut.lines){
+    return("firebrick")
+  } else {
+    return("black")
+  }
+})
+```
+
+```{r}
+pd <- pd.df %>%
+  ggplot(., aes(target_id, line, fill = newfc)) +
+  geom_raster() +
+  scale_fill_gradientn(
+    colors = c("indianred", "white", "steelblue"),
+    labels = scale.labels,
+    breaks = c(-3,-1.5, 0, 1.5, 3),
+    name = expression(paste(log[2], "(FC)")),
+    guide = guide_colorbar(ticks.colour = "black")
+  ) +
+  theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    text = element_text(size = 14),
+    axis.ticks.x = element_blank(),
+    axis.text.x = element_blank(),
+    axis.text.y = element_text(color = d.colors)
+  ) +
+  labs(x = NULL,
+       y = NULL,
+       title = "D")
+
+pd
+```
+
+### Panel E
+
+This is how many many genes (nn) were significant in n lines, separated by up and downregulated. 
+```{r}
+obs.sig.counts <- ddf %>%
+  filter(padj <= .01) %>%
+  mutate(direc = ifelse(log2FoldChange > 0, "up", "down")) %>%
+  group_by(target_id, direc) %>%
+  tally() %>%
+  ungroup() %>%
+  group_by(direc, n) %>%
+  tally() %>%
+  ungroup() %>%
+  add_case(direc = "up", n = 10, nn = 0) # there's no up n=10 case, add it.
+
+# total down genes
+total.down <-
+  sum(obs.sig.counts[obs.sig.counts$direc == "down",]$nn)
+
+# total up genes
+total.up <- sum(obs.sig.counts[obs.sig.counts$direc == "up",]$nn)
+
+# total possible genes
+total.genes <- length(unique(ddf$target_id))
+
+# prob of not being sig down
+prob.not.sig.down <- (total.genes - total.down) / total.genes
+
+
+# prob of not being sig up
+prob.not.sig.up <- (total.genes - total.up) / total.genes
+
+# add the zero case, i.e. n genes that aren't sig and calc probs
+obs.sig.counts <- obs.sig.counts %>%
+  add_case(direc = "down",
+           n = 0,
+           nn = (total.genes - total.down)) %>%
+  add_case(direc = "up",
+           n = 0,
+           nn = (total.genes - total.up)) %>%
+  arrange(direc, n) %>%
+  group_by(direc) %>%
+  mutate(prob = nn / sum(nn)) %>%
+  ungroup()
+
+obs.sig.counts
+```
+
+They are separate plots but make up a single panel. This is the top panel
+```{r}
+rats.top <- obs.sig.counts %>%
+  filter(n != 0) %>%
+  ggplot(., aes(as.numeric(n), nn, fill = direc)) +
+  geom_col(position = position_dodge(preserve = "single")) +
+  scale_x_continuous(breaks = 0:11, expand = c(.01, 0)) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 14),
+    panel.grid = element_blank(),
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(margin = margin(l = 0, r = 1))
+  ) +
+  scale_fill_manual(
+    values = c("indianred", "steelblue"),
+    name = NULL,
+    labels = c("Downregulated",
+               "Upregulated"),
+    guide = "none"
+  ) +
+  labs(x = NULL,
+       y = "n genes",
+       title = "E")
+
+rats.top
+```
+
+A zoom of that because the 0 case is too large
+```{r}
+p.zoom <- obs.sig.counts %>%
+  filter(n >= 5) %>%
+  ggplot(., aes(as.numeric(n), nn, fill = direc)) +
+  geom_col(position = position_dodge(preserve = "single")) +
+  scale_x_continuous(breaks = 1:11) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 14),
+    panel.grid = element_blank(),
+    axis.title.x = element_blank(),
+    panel.background = element_blank()
+  ) +
+  scale_fill_manual(
+    values = c("indianred", "steelblue"),
+    name = NULL,
+    labels = c("Downregulated",
+               "Upregulated"),
+    guide = "none"
+  ) +
+  labs(x = NULL,
+       y = NULL) +
+  scale_y_continuous(breaks = c(10,20))
+
+(rats.top <-
+    rats.top + inset_element(
+      p.zoom,
+      left = .2,
+      bottom = .23,
+      right = .99,
+      top = .99
+    ))
+```
+
+Find the probability of being down or upregulated in a specific line, i.e. the number of genes sig down / number of genes in that line where number of genes in a line is the number of genes that are not deleted
+```{r}
+probs <- ddf %>%
+  filter(seqtype == "rna") %>%
+  split(.$line) %>%
+  map(function(x) {
+    # number of non deleted genes
+    n.genes <- x %>%
+      filter(deleted == FALSE) %>%
+      nrow()
+    
+    # prob downreg
+    p.down <- x %>%
+      filter(padj <= .01 & log2FoldChange < 0) %>%
+      nrow() / n.genes
+    
+    # prob upreg
+    p.up <- x %>%
+      filter(padj <= .01 & log2FoldChange > 0) %>%
+      nrow() / n.genes
+    
+    data.frame(n.genes = n.genes,
+               p.up = p.up,
+               p.down = p.down)
+  }) %>%
+  bind_rows(.id = "line")
+```
+
+Find the expected distributions
+```{r}
+# the down distribution
+p.down <- dsinib(x = 0:11, # chance of getting 0,1,2...,11 success
+                 size = rep(1, 11), # pick 1 gene
+                 prob = probs$p.down)
+
+# the up distribution
+p.up <- dsinib(x = 0:11, # chance of getting 0,1,2...,11 success
+               size = rep(1, 11), # pick 1 gene
+               prob = probs$p.up)
+
+# observed prob of up
+obs.up <- obs.sig.counts[obs.sig.counts$direc == "up",]$prob
+
+# observed prob of down
+obs.down <- obs.sig.counts[obs.sig.counts$direc == "down",]$prob
+
+# combine to single df
+pdf <- data.frame(
+  n = 0:11,
+  "Exp_up" = p.up,
+  "Exp_down" = p.down,
+  "Obs_up" = obs.up,
+  "Obs_down" = obs.down
+)
+
+# make 10 up NA so it doesn't graph because there isn't a point there
+pdf[pdf$n == 10,]$Obs_up <- NA
+
+# save this so it can be used in fig s2
+write_rds(pdf, "../../data_frames/fig_1_probs.rds")
+
+# also make a fake data frame that allows connection of the points at n = 9 and
+# n = 11 for obs up
+connect.df <- data.frame(
+  n = c(9, 11),
+  name = rep("Obs_up"),
+  value = c(pdf[pdf$n == 9,]$Obs_up, pdf[pdf$n == 11,]$Obs_up)
+)
+```
+
+
+The expected total number of genes one would find in x number of lines, 4131 is number of ECB genes considered. 
+```{r}
+exp <- sapply(1:11, function(x) {
+  # total number of down genes expeceted in some number of lines and up x
+  find.down <- (p.down * 4131)[x:11] %>% sum()
+  
+  find.up <- (p.up * 4131)[x:11] %>% sum()
+  
+  n.genes <- floor(find.up + find.down)
+  
+  return(setNames(n.genes, x))
+})
+
+exp
+```
+
+The actual number
+```{r}
+obs <- sapply(1:11, function(x) {
+  obs.sig.counts %>%
+    filter(n >= x) %>%
+    pull(nn) %>%
+    sum() %>%
+    setNames(., x)
+})
+
+obs
+```
+
+KS test the various distributions
+```{r}
+up.p <- ks.test(pdf$Exp_up, na.omit(pdf$Obs_up))$p.value %>%
+  signif(2) %>%
+  paste("p =", .)
+
+down.p <- ks.test(pdf$Exp_down, na.omit(pdf$Obs_down))$p.value %>%
+  signif(2) %>%
+  paste("p =", .)
+```
+
+Plot it
+```{r}
+rats.bottom <- pdf %>%
+  filter(n != 0) %>%
+  pivot_longer(cols = c(starts_with("Ex"), starts_with("Obs"))) %>%
+  mutate(name = str_replace(name, "_", " ")) %>%
+  ggplot(., aes(as.numeric(n), value, color = name, linetype = name)) +
+  geom_point(show.legend = FALSE, size = 1) +
+  geom_line() +
+  geom_line(inherit.aes = FALSE,
+            data = connect.df,
+            aes(n, value),
+            color = "steelblue") +
+  scale_color_manual(values = c("indianred", "steelblue", "indianred", "steelblue")) +
+  scale_linetype_manual(values = c("dashed", "dashed", "solid", "solid")) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    text = element_text(size = 14),
+    legend.position = c(.19, .32),
+    legend.title = element_blank(),
+    legend.background = element_blank(),
+    legend.text = element_text(size = 10),
+    legend.key.height = unit(3, "mm")
+  ) +
+  scale_x_continuous(breaks = 0:11) +
+  labs(x = "Number of lines",
+       y = expression(paste(log[10], "(probability)"))) +
+  scale_y_log10(labels = trans_format("log10", math_format(10 ^ .x)),
+                breaks = breaks_log(6)) +
+  annotate(
+    "text",
+    label = up.p,
+    x = 6,
+    y = 10e-14,
+    color = "steelblue"
+  ) +
+  annotate(
+    "text",
+    label = down.p,
+    x = 6,
+    y = 10e-17,
+    color = "indianred"
+  )
+
+rats.bottom
+```
+
+Together
+```{r}
+(pe <- rats.top / rats.bottom)
+```
+
+### Final figure
+
+```{r fig.width = 11, fig.height = 7}
+top <- (cartoon | pb | pc) + plot_layout(widths = c(.6, .2, .2))
+
+bottom <- (pd | pe) + plot_layout(widths = c(.65, .35))
+
+(ff <- top / bottom)
+```
+
+Save it in various formats
+```{r}
+ggsave(ff, filename = "../../figures/fig_1.png", width = 11, height = 7)
+
+ggsave(ff, filename = "../../figures/fig_1.pdf", device = cairo_pdf, width = 11, height = 7)
+
+write_rds(ff, "../../figures/fig_1.rds")
+```
+
+```{r}
+sessionInfo()
+```

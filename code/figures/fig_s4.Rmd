@@ -1,0 +1,196 @@
+---
+title: "Figure S4"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+```{r}
+library(tidyverse)
+library(ggpubr)
+library(ggrepel)
+library(patchwork)
+library(broom)
+library(gridExtra)
+```
+
+The formula for volume is $\frac{\pi W^2}{4} * (L - \frac{W}{3})$, as code it's  
+`((pi * (SHAPE.width.mean^2))/4) * (SHAPE.length - (SHAPE.width.mean / 3))`.
+```{r}
+size.df <- read_csv("../../data_frames/table_s3_cell_size.csv") %>% 
+  mutate(volume = ((pi * (SHAPE.width.mean^2))/4) * (SHAPE.length - (SHAPE.width.mean / 3)),
+         mutator = ifelse(line %in% c("Ara+6", "Ara+3", "Ara-4", "Ara-2", "Ara-1", "Ara-3"), TRUE, FALSE),
+         age = ifelse(grepl("REL", line), "old", "young"),
+         aspect_ratio = SHAPE.length / SHAPE.width.mean) %>% 
+  filter(line != "Ara+6")
+
+mut.lines <- size.df %>% 
+  filter(mutator == TRUE) %>% 
+  pull(line) %>% 
+  unique()
+
+mut.order <- size.df %>% 
+  select(line, mutator) %>% 
+  distinct() %>% 
+  arrange(mutator, line) %>% 
+  pull(line)
+
+mut.order2 <- c("Anc", mut.order[!(grepl("REL", mut.order))])
+
+head(size.df)
+```
+
+**You must have run the** `compare_to_grant_2021.Rmd` **and generated** `grant_2021_median_volumes.csv` **to run this code**. Load that data
+```{r}
+grant.full.df <- read_csv("../../data_frames/grant_2021_median_volumes.csv") %>% 
+  mutate(mutator = line %in% mut.lines)
+
+grant.df <- grant.full.df %>% 
+  select(line, mutator, mean_of_medians) %>% 
+  distinct() %>% 
+  rename("median_volume" = "mean_of_medians")
+```
+
+### Panel A
+
+This is to be a comparison showing that our estimated volumes are similar to the measured volumes of another paper that used a coulter counter. Get the medians for my data 
+```{r}
+my.median <- size.df %>% 
+  group_by(line, mutator) %>% 
+  summarise(median_volume = median(volume)) %>% 
+  ungroup()
+```
+
+Join them and reshape for plotting
+```{r}
+bdf <- bind_rows("ours" = my.median, "other" = grant.df, .id = "paper") %>% 
+  pivot_wider(names_from = paper, values_from = median_volume)
+```
+
+Compare the medians.
+```{r}
+pa <- bdf %>% 
+  ggplot(., aes(ours, other, label = line, color = mutator))+
+  geom_smooth(inherit.aes = FALSE, aes(ours, other), method = "lm", se = FALSE)+
+  geom_point()+
+  geom_text_repel()+
+  stat_cor(inherit.aes = FALSE, aes(ours, other))+
+  theme_bw()+
+  theme(text = element_text(size = 14),
+        panel.grid = element_blank())+
+  labs(x = "Median volume (fL) this study",
+       y = "Median volume (fL) Grant 2021",
+       title = "A")+
+  scale_color_manual(values = c("black", "firebrick3"), guide = "none")
+
+pa
+```
+
+### Panel B
+
+Our median volume is unaltered when we remove large cells by using the same filtering they use, so the results of our analysis won't change. 
+```{r}
+# get median vols with all cells
+all.meds <- size.df %>% 
+  group_by(line, mutator) %>% 
+  summarise(median_vol = median(volume)) %>% 
+  ungroup()
+
+filtered.meds <- size.df %>% 
+  filter(volume >= .21 & volume <= 5.66) %>% 
+  group_by(line, mutator) %>% 
+  summarise(filtered_median_vol = median(volume)) %>% 
+  ungroup()
+
+pb <- full_join(all.meds, filtered.meds, by = c("line", "mutator")) %>% 
+  mutate(difference = median_vol - filtered_median_vol) %>% 
+  ggplot(., aes(median_vol, filtered_median_vol, label = line, color = mutator))+
+  geom_abline(aes(intercept = 0, slope = 1), linetype = 5, color = "grey50")+
+  geom_point()+
+  geom_text_repel(force = 10, seed = 1, min.segment.length = 0, box.padding = .4)+
+  scale_color_manual(values = c("black", "firebrick3"), guide = "none")+
+  theme_bw()+
+  theme(text = element_text(size = 14),
+        panel.grid = element_blank())+
+  scale_x_continuous(limits = c(0, 5))+
+  scale_y_continuous(limits = c(0, 5))+
+  labs(x = "Median volume (fL)",
+       y = "Filtered median volume (fL)",
+       title = "B")+
+  stat_cor(inherit.aes = FALSE, aes(median_vol, filtered_median_vol))
+
+pb
+```
+
+### Panel C
+
+Relationship between volume and a bunch of other parameters. Point being, big cells are usually long.
+```{r fig.width = 11, fig.height = 4.5}
+new.y.labs <- c("Aspect ratio", "Length (um)", "Width (um)")
+
+names(new.y.labs) <- c("aspect_ratio", "SHAPE.length", "SHAPE.width.mean")
+
+ddf <- size.df %>%
+  mutate(newline = ifelse(grepl("REL", line), "Anc", line))
+
+pc <- ddf %>%
+  select(newline, age, volume, SHAPE.width.mean, aspect_ratio, SHAPE.length) %>%
+  pivot_longer(cols = c(SHAPE.width.mean, SHAPE.length, aspect_ratio), names_to = "parameter", values_to = "parameter.in.um") %>%
+  ggplot(., aes(volume, parameter.in.um))+
+  geom_vline(aes(xintercept = 5.66), linetype = 5, color = "black")+
+  geom_vline(aes(xintercept = 0.21), linetype = 5, color = "black")+
+  ggpointdensity::geom_pointdensity(size=.5)+
+  geom_smooth(method = "lm", se = FALSE, color = "green3", size = .8)+
+  scale_y_log10()+
+  scale_x_log10()+
+  facet_grid(parameter ~ newline, labeller = labeller(parameter = new.y.labs), scales = "free_y")+
+  stat_cor(size = 2.75, label.y.npc = .05, label.x.npc = 1, aes(label = ..r.label..), hjust = "right")+
+  theme_bw()+
+  theme(panel.background = element_blank(),
+        text = element_text(size = 13),
+        panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1),
+        strip.text.y = element_text(size = 10),
+        legend.position = "bottom")+
+  labs(x = "Volume in fL",
+       y = expression(paste("Parameter in indicated units")),
+       title = "C")+
+  scale_color_viridis_c(option = "B", name = "Neighboring points", breaks = c(1, 700, 1400))
+
+pc
+```
+
+### Final figure
+
+```{r fig.width = 11, fig.height = 8}
+top <- (pa | pb | plot_spacer()) + plot_layout(widths = c(.33, .33, .33))
+
+(ff <- (top / pc) + plot_layout(heights = c(.55, .45)))
+``` 
+
+```{r}
+ggsave(ff, filename = "../../figures/fig_s4.png", width = 11, height = 8)
+
+ggsave(ff, filename = "../../figures/fig_s4.pdf", device = cairo_pdf, width = 11, height = 8)
+
+write_rds(ff, "../../figures/fig_s4.rds")
+```
+
+```{r}
+sessionInfo()
+```

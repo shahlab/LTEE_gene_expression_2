@@ -1,0 +1,382 @@
+---
+title: "Figure S3"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+```{r}
+library(tidyverse)
+library(patchwork)
+library(ggpubr)
+
+all.data <- read_csv("../../data_frames/all_data.csv") %>% 
+  filter(gene_type == "ECB")
+
+mut.levels <- all.data %>%
+  select(line, mutator) %>%
+  arrange(mutator, line) %>%
+  unique() %>%
+  pull(line)
+
+mut.colors <- c("black", rep("black", 5), rep("firebrick3", 5))
+
+ddf <- read_csv("../../data_frames/table_s2_fold_changes.csv") %>%
+  filter(seqtype == "rna") %>%
+  mutate(line = factor(line, levels = mut.levels))
+
+old.data <- read_csv("../../data_frames/genes_2003.csv")
+```
+
+### Panel A
+
+Find all of the genes from their data in mine, only 39 are common between the two.
+```{r}
+their.genes <- old.data %>% 
+  pull(gene)
+
+my.rels <- all.data %>% 
+  pull(rel_name) %>% 
+  unique()
+
+(gene.intersection <- intersect(their.genes, my.rels))
+```
+
+Which ones are missing?
+```{r}
+setdiff(their.genes, my.rels)
+```
+
+I'm looking these up on ecocyc
+```{r}
+gene.rename <- c(
+  "flaG" = "flhB",
+  "b1009" = "rutD",
+  "ybaC" = "aes",
+  "yaeT" = "bamA",
+  "yafU" = "yafU", # couldn't find this one
+  "b0762" = "acrZ",
+  "b1044" = "ymdA",
+  "b1490" = "dosC",
+  "b2445" = "yffN",
+  "b2462" = "eutS",
+  "b2772" = "ygcU",
+  "b2809" = "ygdI",
+  "yaeJ" = "arfB",
+  "ydfC" = "ydfC", # this one too, but it's a prophage
+  "yjgF" = "ridA",
+  "yjiD" = "iraD",
+  "ykfB" = "ykfB", # again, a prophage
+  "yohH" = "mdtQ",
+  "yliJ" = "gstB",
+  "b1168" = "pdeG",
+  "yhcJ" = "nanE",
+  "yjcP" = "mdtP"
+)
+
+(rename.df <- enframe(gene.rename, name = "gene", value = "ecocyc_name"))
+```
+
+Can I find all 22 of those in my data? Just 15
+```{r}
+intersect(my.rels, rename.df$ecocyc_name)
+```
+
+Which are missing?
+```{r}
+setdiff(rename.df$ecocyc_name, my.rels)
+```
+
+I can only find two more using biocyc REL606 database, not ecocyc
+```{r}
+biocyc.names <- c(
+  "mdtQ" = "yohGH",
+  "dosC" = "yddV"
+)
+
+(biocyc.names.df <- enframe(biocyc.names, name = "ecocyc_name", value = "biocyc_name"))
+```
+
+Translate the names to the new ones. 
+```{r}
+# a df of the names I already have
+already.have <- data.frame(gene = gene.intersection,
+                           ecocyc_name = gene.intersection)
+
+final.names.df <- full_join(rename.df, biocyc.names.df) %>% 
+  bind_rows(already.have) %>% 
+  mutate(final_name = ifelse(is.na(biocyc_name), ecocyc_name, biocyc_name)) %>% 
+  select(gene, final_name)
+
+final.names.df
+```
+
+Get those fold changes, I get 54/58 and the missing ones are phages mostly. 
+```{r}
+my.fcs <- all.data %>% 
+  filter(rel_name %in% final.names.df$final_name) %>% 
+  select(line, rel_name, ds_log2foldchange_rna, ds_padj_rna)
+
+head(my.fcs)
+```
+
+Convert the old names to new names and process for graphing.
+```{r}
+top.df <- left_join(old.data, final.names.df) %>% 
+  select(-gene, -func_group) %>% 
+  filter(final_name %in% my.fcs$rel_name) %>% 
+  pivot_longer(cols = where(is.numeric), values_to = "value", names_to = "line") %>% 
+  rename("rel_name" = "final_name") %>% 
+  mutate(line = paste0("2003 ", line),
+         mutator = FALSE)
+
+# order is based on increasing fold change
+gene.order <- top.df %>% 
+  group_by(rel_name) %>% 
+  summarise(mean_fc = mean(value)) %>% 
+  ungroup() %>% 
+  arrange(mean_fc) %>% 
+  pull(rel_name)
+```
+
+```{r}
+mut.lines <- all.data %>% 
+  filter(mutator == TRUE) %>% 
+  pull(line) %>% 
+  unique()
+```
+
+Get my changes. 
+```{r}
+bottom.df <- my.fcs %>% 
+  mutate(mutator = line %in% mut.lines) %>% 
+  select(line, rel_name, ds_log2foldchange_rna) %>% 
+  rename("value2" = "ds_log2foldchange_rna")
+```
+
+Cluster our data
+```{r}
+lines.clust <- bottom.df %>% 
+  pivot_wider(names_from = rel_name, values_from = value2) %>% 
+  column_to_rownames("line") %>% 
+  dist() %>% 
+  hclust()
+
+line.order <- setNames(lines.clust$order, lines.clust$labels) %>% 
+  sort() %>% 
+  names()
+
+pa.colors <- sapply(line.order, function(x){
+  if (x %in% mut.lines){
+    return("firebrick")
+  } else {
+    return("black")
+  }
+})
+```
+
+Combine the data. Their values are odd to graph, they say that a -2 indicates a halving of the expression and a +2 indicates a doubling, which means that for positive numbers log2(x) = l2fc but for negative numbers it's log2(1/abs(x))
+```{r}
+calc_l2fc <- function(x){
+  if (x > 0){
+    tmp <- log2(x)
+  } else {
+    tmp <- log2(1/abs(x))
+  }
+  
+  return(tmp)
+}
+
+top.df2 <- top.df %>%
+  rowwise() %>%
+  mutate(value2 = calc_l2fc(value)) %>%
+  ungroup()
+
+pa.df <- bind_rows(top.df2, bottom.df) %>%
+  select(rel_name, line, value2) %>% 
+  mutate(rel_name = factor(rel_name, gene.order),
+         line = factor(line, c(line.order, "2003 Ara+1", "2003 Ara-1")))
+
+pa <-  pa.df %>%
+  ggplot(., aes(rel_name, line, fill = value2)) +
+  geom_raster() +
+  scale_fill_gradient2(
+    low = "indianred",
+    mid = "white",
+    high = "steelblue",
+    name = expression(paste(log[2], "(FC)"))
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(
+      angle = 90,
+      vjust = .5,
+      hjust = 1,
+      size = 10
+    ),
+    text = element_text(size = 14),
+    axis.text.y = element_text(color = c(pa.colors, "black", "black"))
+  ) +
+  labs(x = NULL,
+       y = NULL,
+       title = "A")
+
+pa
+```
+
+### Panel B
+
+The relationship between fold change and ancestral TPM
+```{r}
+# get the anc tpms and l2fcs for all and sig genes separately
+d.rna.sig <- all.data %>%
+  filter(ds_padj_rna <= .01) %>% 
+  select(line, target_id, anc_mean_tpm_rna, ds_log2foldchange_rna) %>%
+  rename("l2fc" = "ds_log2foldchange_rna",
+         "anc_tpm" = "anc_mean_tpm_rna")
+
+d.rna.all <- all.data %>%
+  select(line, target_id, anc_mean_tpm_rna, ds_log2foldchange_rna) %>%
+  rename("l2fc" = "ds_log2foldchange_rna",
+         "anc_tpm" = "anc_mean_tpm_rna")
+
+# put them all together
+bdf <- bind_rows("RNA-seq_all" = d.rna.all,
+                 "RNA-seq_sig" = d.rna.sig,
+                 .id = "d_type") %>%
+  separate(d_type, into = c("seqtype", "dtype"), sep = "_")
+
+# this allows us to not show non-significant points twice by allowing them to have an alpha of 0
+# but they still contribute to the regressions, they're just not drawn in black and red
+alpha.df <- bdf %>% 
+  group_by(seqtype, line, target_id) %>%
+  tally() %>% 
+  ungroup()
+
+# join those
+bdf2 <- left_join(bdf, alpha.df) %>% 
+  mutate(alpha = ifelse(dtype == "all" & n == 2, "a", "b"))
+```
+
+Then plot
+```{r fig.width = 11, fig.height = 4.5}
+pb <- bdf2 %>%
+  ggplot(., aes(anc_tpm, l2fc, color = dtype))+
+  geom_point(size = .5, aes(alpha = alpha))+
+  facet_wrap(~ line, ncol = 6)+
+  scale_x_log10(labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+  scale_color_manual(values = c("black", "brown2"), guide = "none")+
+  theme_bw()+
+  theme(panel.background = element_blank(),
+        text = element_text(size = 14),
+        panel.grid = element_blank(),
+        strip.background = element_rect(color = NA, fill = "grey90"))+
+  labs(x = "Mean ancestral TPM",
+       y = expression(paste(log[2], "(fold-change)")),
+       title = "B")+
+  stat_cor(size = 2.7, label.y.npc = .15, p.accuracy = .01, r.accuracy = .01)+
+  scale_alpha_manual(values = c(0, 1), guide = "none")
+
+pb
+```
+
+### Panel C
+
+TPM of deleted genes. Within each, line what was the ancestral TPM of the deleted genes?
+```{r}
+# ancestral TPM of all genes
+anc.tpms <- all.data %>% 
+  select(target_id, anc_mean_tpm_rna) %>% 
+  distinct() %>% 
+  mutate(xlabz = "Ancestor\nall genes")
+
+# Ancestral TPM of genes deleted in each line
+evo.tpms.of.del.genes <- all.data %>% 
+  filter(deleted == TRUE) %>% 
+  select(line, anc_mean_tpm_rna) %>% 
+  group_by(line) %>% 
+  mutate(xlabz = paste0(line, "\n", n())) %>% 
+  ungroup()
+
+# line order based on median
+line.order.c <- evo.tpms.of.del.genes %>% 
+  group_by(xlabz) %>% 
+  summarise(med = median(log10(anc_mean_tpm_rna))) %>% 
+  arrange(med) %>% 
+  pull(xlabz)
+
+line.order.c2 <- c("Ancestor\nall genes", line.order.c)
+
+# combine them
+pc.df <- bind_rows(anc.tpms, evo.tpms.of.del.genes) %>% 
+  mutate(old = xlabz == "Ancestor\nall genes",
+         xlabz = factor(xlabz, line.order.c2))
+
+# ancestral median line
+anc.med <- median(anc.tpms$anc_mean_tpm_rna)
+
+# axis colors
+c.lines <- evo.tpms.of.del.genes %>% 
+  group_by(line) %>% 
+  summarise(med = median(log10(anc_mean_tpm_rna))) %>% 
+  arrange(med) %>% 
+  pull(line)
+
+pc.colors <- sapply(c("Anc", c.lines), function(x){
+  if (x %in% mut.lines){
+    return("firebrick")
+  } else {
+    return("black")
+  }
+})
+
+# the ancestral median needs to be hard coded into this grraph so it can save as
+# a rds file
+pc <- pc.df %>% 
+  ggplot(., aes(xlabz, anc_mean_tpm_rna, fill = old))+
+  geom_boxplot(outlier.size = 1)+
+  geom_hline(aes(yintercept = 2.172789), linetype = 5)+
+  scale_y_log10(labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+  theme_bw()+
+  theme(panel.background = element_blank(),
+        text = element_text(size = 14),
+        panel.grid = element_blank(),
+        axis.text.x = element_text(color = pc.colors))+
+  scale_fill_manual(values = c("white", "grey70"), guide = "none")+
+  stat_compare_means(ref.group = "Ancestor\nall genes", aes(label = ..p.signif..))+
+  labs(x = NULL, y = "TPM", title = "C")
+
+pc
+```
+### Final figure
+
+```{r fig.width = 11, fig.height = 11}
+ff <- (pa / pb / pc) + plot_layout(heights = c(.3, .4, .3))
+
+ff
+```
+
+Save it in various formats
+```{r}
+ggsave(ff, filename = "../../figures/fig_s3.png", width = 11, height = 8)
+
+ggsave(ff, filename = "../../figures/fig_s3.pdf", device = cairo_pdf, width = 11, height = 11)
+
+write_rds(ff, "../../figures/fig_s3.rds")
+```

@@ -1,0 +1,197 @@
+---
+title: "Figure S1"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+```{r}
+library(tidyverse)
+library(patchwork)
+library(scales)
+```
+
+Read in the 3nt periodicity data frame.
+```{r}
+nt.df <- read_csv("../../data_frames/three_nt_periodicity.csv") %>% 
+  filter(line != "Ara+6")
+```
+
+Load the kallisto results (only ECB genes), change some names for labeling purposes, and factor some columns.
+```{r}
+kdf <- read_csv("../../data_frames/table_s1_read_counts.csv") %>% 
+  filter(str_detect(target_id, "ECB")) %>% 
+  unite("sample", c(repl, seqtype), remove = FALSE) %>% 
+  select(-eff_length, -length)
+
+kdf$seqtype <- gsub("rna", "RNA-seq", kdf$seqtype) %>% 
+  gsub("ribo", "Ribo-seq", .)
+
+kdf$seqtype <- factor(kdf$seqtype, levels = c("RNA-seq", "Ribo-seq"))
+
+kdf$sample <- factor(kdf$sample, levels = c("rep1_rna", "rep2_rna", "rep1_ribo", "rep2_ribo"))
+```
+
+Find the mean number of reads per gene for each sample and rep
+```{r}
+rpg <- kdf %>% 
+  filter(grepl("ECB", target_id)) %>% 
+  group_by(repl, seqtype, line, sample) %>% 
+  summarise(mean_reads_per_gene = mean(est_counts))
+
+head(rpg)
+```
+
+### Panel A
+
+Mean reads per gene per sample
+```{r}
+pa <- ggplot(rpg, aes(line, mean_reads_per_gene, fill = sample))+
+  geom_col(position = "dodge")+
+  scale_fill_manual(values = c("#A6CEE3", "#1F78B4", "#FDBF6F", "#FF7F00"),
+                    name = NULL,
+                    labels = c("RNA-seq 1", "RNA-seq 2", "Ribo-seq 1", "Ribo-seq 2"))+
+  theme_bw()+
+  theme(legend.position = c(.94, .75), 
+        panel.grid = element_blank(),
+        text = element_text(size = 14),
+        legend.background = element_blank())+
+  labs(x = NULL,
+       y = "Mean reads per gene",
+       title = "A")+
+  scale_y_continuous(limits = c(0, 2000), breaks = seq(0, 2000, 500))
+
+pa
+```
+
+### Panel B
+
+```{r fig.width = 10, fig.height = 3.5}
+pb <- nt.df %>%
+  filter(seqtype == "ribo") %>% 
+  unite("sample", seqtype, rep, sep = "_") %>% 
+  group_by(sample, line) %>% 
+  mutate(spec = scales::rescale(spec)) %>% 
+  ggplot(., aes(period, spec, color = sample))+
+  geom_line(size = 1)+
+  facet_wrap(~ line, ncol = 7)+
+  scale_color_manual(values = c("#FDBF6F", "#FF7F00"), labels = c("Ribo-seq 1", "Ribo-seq 2", "RNA-seq 1", "RNA-seq 2"), name = NULL, guide = "none")+
+  theme_bw()+
+  theme(legend.position = c(.04, .88), 
+        panel.grid = element_blank(),
+        text = element_text(size = 14),
+        legend.background = element_blank())+
+  scale_y_continuous(limits = c(0, 1), breaks = c(0, .5, 1))+
+  labs(x = "Period",
+       y = "Normalized signal strength",
+       title = "B")+
+  scale_x_continuous(breaks = c(2,3,4))
+
+pb
+```
+
+### Panel C
+
+Distributions of reads per gene
+```{r fig.width = 9, fig.height = 3.5}
+pc <- kdf %>% 
+  ggplot(aes(line, est_counts, fill = sample))+
+  geom_boxplot(outlier.size = .5)+
+  scale_y_log10(labels = label_number_si())+
+  scale_fill_manual(values = c("#A6CEE3", "#1F78B4", "#FDBF6F", "#FF7F00"),
+                    name = NULL,
+                    labels = c("RNA-seq 1", "RNA-seq 2", "Ribo-seq 1", "Ribo-seq 2"),
+                    guide = "none")+
+  theme_bw()+
+  theme(legend.position = c(.1, .85), 
+        panel.grid = element_blank(),
+        text = element_text(size = 14),
+        legend.background = element_blank(),
+        strip.background = element_rect(fill = "grey90", color = NA))+
+  labs(y = expression(paste(log[10], "(read counts)")),
+       x = NULL,
+       title = "C")
+
+pc
+```
+
+### Panel D
+
+Correlations for replicates based on counts/TPMs. Make the correlations df
+```{r}
+ddf <-
+  lapply(c("TPM" = "tpm", "Counts" = "est_counts"), function(x) {
+    kdf %>%
+      select(line, seqtype, repl, target_id, all_of(x)) %>%
+      split(list(.$line, .$seqtype)) %>%
+      map(function(x) {
+        df <- x %>%
+          pivot_wider(names_from = repl,
+                      values_from = where(is.numeric)) %>%
+          mutate(across(.cols = where(is.numeric), .f = log10)) %>%
+          na_if(-Inf)
+        
+        cors <-
+          as_tibble(unique(cor(df$rep1, df$rep2, use = "pairwise.complete.obs")))
+      }) %>%
+      bind_rows(.id = "sample") %>%
+      separate(sample, into = c("line", "seqtype"), sep = "\\.")
+  }) %>%
+  bind_rows(.id = "feature")
+
+paste("min cor =", min(ddf$value), "max cor =", max(ddf$value))
+```
+
+```{r}
+pd <- ddf %>% 
+  mutate(seqtype = factor(seqtype, levels = c("RNA-seq", "Ribo-seq"))) %>% 
+  ggplot(., aes(feature, value, fill = seqtype))+
+  geom_boxplot(outlier.size = .1)+
+  theme_bw()+
+  theme(legend.position = c(.5, .17), 
+        panel.grid = element_blank(),
+        text = element_text(size = 14),
+        legend.background = element_blank())+
+  labs(y = expression(paste("R of ", log[10], "(feature)")),
+       x = NULL,
+       title = "D")+
+  scale_fill_manual(values = c("cornflowerblue", "orange"), name = NULL)+
+  scale_y_continuous(limits = c(.9, 1))
+
+pd
+```
+
+### Final figure
+
+```{r fig.width = 11, fig.height = 8.5}
+(ff <- (pa / pb / ((pc | pd) + plot_layout(widths = c(.88, .12)))))
+```
+
+Save as a pdf and png
+```{r}
+ggsave(ff, filename = "../../figures/a_fig_s1.pdf", width = 11, height = 8.5)
+
+ggsave(ff, filename = "../../figures/a_fig_s1.png", dpi = 300, width = 11, height = 8.5)
+
+write_rds(ff, "../../figures/fig_s1.rds")
+```
+
+```{r}
+sessionInfo()
+```
+

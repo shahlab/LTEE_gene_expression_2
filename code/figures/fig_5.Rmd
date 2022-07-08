@@ -1,0 +1,300 @@
+---
+title: "Figure 5"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+This figure is more complicated than it looks. This is split into two sections which each create the eventual top and bottom pieces of a plot. The code can also be used as a framework to make similar plots for different sets of genes. 
+
+Read in the necessary data
+```{r}
+library(tidyverse)
+library(patchwork)
+library(ggpubr)
+library(rtracklayer)
+library(ggrepel)
+library(scales)
+
+all.data <- read_csv("../../data_frames/all_data.csv") %>% 
+  filter(gene_type == "ECB")
+
+# mutator order and colors
+mut.levels <- all.data %>%
+  select(line, mutator) %>%
+  arrange(mutator, line) %>%
+  unique() %>%
+  pull(line)
+
+mut.colors <- c("black", rep("black", 5), rep("firebrick3", 5))
+```
+
+Read in the required items.
+```{r}
+# the list of mutations, and the specific clones for our mutations
+my.mutations <- read_csv("../../data_frames/table_s12_mutations.csv")
+
+# the ancestral gff
+anc.gff <- readGFFAsGRanges("../../gffs/AraR6.gff")
+```
+
+The colors for the operon membership on the x axis
+```{r}
+mycolors <- c("#ad0008","#392bab","#839000","#009590","#ca991b","#302974","#dc2b2a","#008746","#7e0025","#a0a569","#9a4f00")
+```
+
+The colors for the mutation plots
+```{r}
+snp.color <- "darkorchid"
+del.color <- "orange2"
+ins.color <- "forestgreen"
+```
+
+### Heatmap function
+
+The following functions allow you to start with a vector of named genes where the elements of the vector are the names of the genes and the names of elements are operon membership. The actual names don't matter, so long as they are different strings. This takes a few arguments  
+x = named vector of genes  
+title = title you want the heatmap to have, appears as a facet  
+threshold = min/max fold change to show, a positive integer   
+fig_letter = the figure letter, like A, B, C, etc  
+x_labs = a vector of x labels, namely for underlining purposes  
+The legend that appears with this is for the bottom mutations on genes plots, but it has to be made here
+```{r}
+heatmap_function <- function(x, title, threshold, fig_letter, x_labs){
+  # make a df that is keys for operons membership
+  key.df <- enframe(x, value = "k12_name", name = "operon") %>% 
+    mutate(graph_label = title)
+  
+  # find fcs for those genes
+  fcdf <- all.data %>%
+    filter(k12_name %in% x) %>%
+    mutate(stars = cut(
+      ds_padj_rna,
+      c(1, .05, .01, .001, .0001,-Inf),
+      labels = c("****", "***", "**", "*", "")
+    )) %>%
+    dplyr::select(line, k12_name, ds_log2foldchange_rna, stars) %>%
+    left_join(., key.df, by = "k12_name")
+  
+  # change min/max fcs to the threshold
+  fcdf$ds_log2foldchange_rna[fcdf$ds_log2foldchange_rna > threshold] <- threshold
+  fcdf$ds_log2foldchange_rna[fcdf$ds_log2foldchange_rna < -threshold] <- -threshold
+  
+  # factor x and y axis
+  fcdf$line <- factor(fcdf$line, levels = mut.levels)
+  fcdf$k12_name <- factor(fcdf$k12_name, levels = x)
+  
+  # create the color vector for the x axis
+  # both number of colors (length(rep.vec)) and n times to repeat each color
+  rep.vec <- table(key.df$operon)
+  
+  # make a vector where each color repeats the correct amount of times
+  color.vec <- sapply(1:length(rep.vec), function(y){
+    rep(mycolors[y], rep.vec[y])
+  }) %>% unlist()
+  
+  # randomly add one of the three mutation types to the df, this is only for the purpose
+  # of making their be a color legend of the bottom graph, the layer is drawn underneath
+  # the heatmap so you can't actually see it but the legend shows, which is the intended
+  # effect. seed ensures all three show up,
+
+  set.seed(1)
+
+  mut.vec <- sample(c("Deletion", "SNP", "Insertional\nelement"), nrow(fcdf), replace = TRUE)
+  
+  # add that column
+  fcdf$mtype <- mut.vec
+  
+  # new color bar labels
+  scale.labels <- c(paste("\u2264", paste0("-", threshold), sep = ""),
+                    "",
+                    0,
+                    "",
+                    paste("\u2265", threshold, sep = ""))
+  
+  # make clean colorbar breaks
+  cbreaks <- c(-threshold,
+               -threshold+(threshold/2),
+               0,
+               threshold-(threshold/2),
+               threshold)
+  
+  # finally, make a graph  
+  plot <- fcdf %>%
+    ggplot(., aes(k12_name, line, fill = ds_log2foldchange_rna, label = stars))+
+    geom_point(aes(color = mtype))+
+    geom_raster()+
+    geom_text()+
+    scale_fill_gradient2(low = "indianred", high = "steelblue", 
+                         name = expression(paste(log[2], "(FC)")),
+                         limits = c(-threshold, threshold),
+                         guide = guide_colorbar(ticks.colour = "black"),
+                         breaks = cbreaks,
+                         labels = scale.labels)+
+    theme_bw()+
+    theme(text = element_text(size = 13),
+          axis.text.x = element_text(color = color.vec),
+          axis.text.y = element_text(color = mut.colors),
+          panel.background = element_blank(),
+          legend.key = element_blank(),
+          panel.grid = element_blank())+
+    labs(x = NULL,
+         y = NULL,
+         title = fig_letter)+
+    facet_wrap(~ graph_label)+
+    scale_x_discrete(labels = x_labs)+
+    scale_color_manual(values = c(del.color, ins.color, snp.color), name = "Mutation type")
+ 
+  return(plot) 
+}
+```
+
+### Gene maps
+
+This code allows you to get small maps of genes, showing the locations of various mutations. It requires a list of genes you're interested, named with itself.
+```{r}
+genes <- c("nadR", "malT")
+
+names(genes) <- genes
+```
+
+This block creates the data structures necessary for the plot, each gene ends up as a list, and each component of that list is used to make a graph.
+```{r}
+plot.df.list <- lapply(genes, function(x){
+  ## gene position section
+  # find start and stop pos of gene in ancestor
+  gene.in.gff <- anc.gff[!is.na(anc.gff$Name) & anc.gff$Name == x & anc.gff$type == "CDS"]
+  
+  # make a data frame of this to make the rectangle on the plot
+  gene.pos.df <- data.frame(starts = start(gene.in.gff),
+                            ends = end(gene.in.gff),
+                            gene = x)
+  
+  ## snps section
+  # find all the snps positions, NA row ensures presence of a df if no snps present
+  snp.pos.df <- my.mutations %>%
+    filter(grepl(x, gene_list) & type == "SNP") %>%
+    select(population, start_position) %>%
+    dplyr::rename("snp_pos" = start_position) %>%
+    add_case(population = NA, snp_pos = NA)
+  
+  ## dels section
+  # create the data frame for deletions, NA row ensures presence of a df if no dels present
+  del.pos.df <- my.mutations %>%
+    filter(grepl(x, gene_list) & (type == "DEL" | type == "INS")) %>%
+    select(population, start_position, end_position) %>%
+    add_case(population = NA, start_position = NA, end_position = NA)
+  
+  ## mobile element section
+  # create the data frame for insertional elements, NA row ensures presence of a df if no mobs present
+  ins.pos.df <- my.mutations %>%
+    filter(grepl(x, gene_list) & type == "MOB") %>%
+    select(population, start_position, end_position) %>%
+    add_case(population = NA, start_position = NA, end_position = NA)
+  
+  return(list("gene.pos.df" = gene.pos.df, 
+              "snp.pos.df" = snp.pos.df,
+              "del.pos.df" = del.pos.df,
+              "ins.pos.df" = ins.pos.df))
+})
+```
+
+This block takes the above results and makes plots from them
+```{r}
+rect.y.min <- -.25
+rect.y.max <- .25
+scale.y.min <- -1
+scale.y.max <- 1.5
+
+gene.plots <- lapply(plot.df.list, function(x){
+  # in case you want to only label gene start stop
+  xlabs <- c(x$gene.pos.df$starts, x$gene.pos.df$ends)
+  
+  gene.lab <- x$gene.pos.df$gene[1]
+  
+  ggplot()+
+    geom_rect(data = x$del.pos.df, aes(xmin = start_position, xmax = end_position+3, ymin = .25, ymax = .25), fill = del.color, color = NA, alpha = .5)+
+    geom_rect(data = x$ins.pos.df, aes(xmin = start_position, xmax = end_position+1, ymin = .25, ymax = .25), fill = ins.color, color = NA)+
+    geom_rect(data = x$gene.pos.df, aes(xmin = starts, xmax = ends, ymin = .25, ymax = .25), fill = NA, color = "black")+
+    geom_segment(data = x$snp.pos.df, aes(x = snp_pos, xend = snp_pos, y = .25, yend = .25), color = snp.color)+
+    geom_text_repel(data = x$snp.pos.df, aes(label = population, x = snp_pos, y = .25), ylim = c(.25, scale.y.max), box.padding = .5, min.segment.length = .001, color = snp.color, segment.alpha = .5, max.overlaps = Inf)+
+    geom_text_repel(data = x$del.pos.df, aes(label = population, x = start_position, y = .25), ylim = c(.25, scale.y.min), box.padding = .5, min.segment.length = .001, color = del.color, segment.alpha = .5, max.overlaps = Inf)+
+    geom_text_repel(data = x$ins.pos.df, aes(label = population, x = start_position, y = .25), ylim = c(.25), box.padding = .5, min.segment.length = .001, color = ins.color, segment.alpha = .5, max.overlaps = Inf)+
+    theme(panel.background = element_blank(),
+          axis.line.x = element_line(color = "black"),
+          axis.ticks.y = element_blank(),
+          axis.text.y = element_text(color = "black", size = 11))+
+    scale_y_continuous(limits = c(-1, 1.5), breaks = 0, label = gene.lab)+
+    scale_x_continuous(labels = scales::label_number(), breaks = scales::breaks_extended(4))+
+    labs(x = "Base position in ancestor", y = NULL)
+    
+})
+
+gene.plots
+```
+
+### Panel A
+
+The maltose genes
+```{r}
+maltose <- c("malT", "malG", "malF", "malE", "malK", "lamB", "malM", "malP", "malQ", "malZ", "malS")
+
+names(maltose) <- c("ma", rep("mb", 3), rep("mc", 3), rep("md", 2), "me", "mf")
+
+mal.x.labs <-  c(expression(underline("malT"), "malG", "malF", "malE", "malK", "lamB", "malM", "malP", "malQ", "malZ", "malS"))
+
+pa.top <- heatmap_function(maltose, title = "Maltose transport/metabolism", threshold = 3, fig_letter = "A", x_labs = mal.x.labs)
+
+(pa <- (pa.top / gene.plots$malT) + plot_layout(heights = c(.7, .3)))
+```
+
+### Panel B
+
+The NAD genes
+```{r}
+nad <- c("nadR", "nadA", "pnuC", "nadB", "pncB")
+
+names(nad) <- c("na", rep("nb", 2), "nc", "nd")
+
+nad.x.labs <- c(expression(underline("nadR"), "nadA", "pnuC", "nadB", "pncB"))
+
+pb.top <- heatmap_function(nad, title = "NAD synthesis", threshold = 3, fig_letter = "B", x_labs = nad.x.labs)
+
+(pb <- (pb.top / gene.plots$nadR) + plot_layout(heights = c(.7, .3)))
+```
+
+### Final figure
+
+```{r fig.width = 11, fig.height = 5}
+ff <- (pa | pb) + plot_layout(guides = "collect", widths = c(.65, .35))
+
+ff
+```
+
+Save it in various formats
+```{r}
+ggsave(ff, filename = "../../figures/fig_5.png", width = 11, height = 5)
+
+ggsave(ff, filename = "../../figures/fig_5.pdf", device = cairo_pdf, width = 11, height = 5)
+
+write_rds(ff, "../../figures/fig_5.rds")
+```
+
+```{r}
+sessionInfo()
+```

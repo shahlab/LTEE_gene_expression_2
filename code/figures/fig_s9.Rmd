@@ -1,0 +1,357 @@
+---
+title: "Figure S9"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(patchwork)
+library(gridExtra)
+library(rtracklayer)
+library(ggrepel)
+
+all.data <- read_csv("../../data_frames/all_data.csv") %>% 
+  filter(gene_type == "ECB")
+
+gff <- readGFFAsGRanges("../../gffs/AraR6.gff")
+
+my.mutations <- read_csv("../../data_frames/table_s12_mutations.csv")
+
+anc.gff <- readGFFAsGRanges("../../gffs/AraR6.gff")
+```
+
+The colors for the operon membership on the x axis
+```{r}
+mycolors <- c("#ad0008","#392bab","#839000","#009590","#ca991b","#302974","#dc2b2a","#008746","#7e0025","#a0a569","#9a4f00")
+```
+
+mutator levels and colors
+```{r}
+mut.levels <- all.data %>%
+  dplyr::select(line, mutator) %>%
+  arrange(mutator, line) %>%
+  unique() %>%
+  pull(line)
+
+mut.colors <- c("black", rep("black", 5), rep("firebrick3", 5))
+```
+
+The colors for the mutation plots
+```{r}
+snp.color <- "darkorchid"
+del.color <- "orange2"
+ins.color <- "forestgreen"
+```
+
+
+The following functions allow you to start with a vector of named genes where the elements of the vector are the names of the genes and the names of elements are operon membership. The actual names don't matter, so long as they are different strings.
+
+### Make the heatmap
+
+This takes a few arguments  
+x = named vector of genes  
+title = title you want the heatmap to have, appears as a facet  
+threshold = min/max fold change to show, a positive integer   
+fig_letter = the figure letter, like A, B, C, etc  
+x_labs = a vector of x labels, namely for underlining purposes  
+The legend that appears with this is for the bottom mutations on genes plots, but it has to be made here
+```{r}
+heatmap_function <- function(x, title, threshold, fig_letter, x_labs){
+  # make a df that is keys for operons membership
+  key.df <- enframe(x, value = "k12_name", name = "operon") %>% 
+    mutate(graph_label = title)
+  
+  # find fcs for those genes
+  fcdf <- all.data %>%
+    filter(k12_name %in% x) %>%
+    mutate(stars = cut(
+      ds_padj_rna,
+      c(1, .05, .01, .001, .0001,-Inf),
+      labels = c("****", "***", "**", "*", ""))) %>%
+    dplyr::select(line, k12_name, ds_log2foldchange_rna, stars) %>%
+    left_join(., key.df, by = "k12_name")
+  
+  # change min/max fcs to the threshold
+  fcdf$ds_log2foldchange_rna[fcdf$ds_log2foldchange_rna > threshold] <- threshold
+  fcdf$ds_log2foldchange_rna[fcdf$ds_log2foldchange_rna < -threshold] <- -threshold
+  
+  # factor x and y axis
+  fcdf$line <- factor(fcdf$line, levels = mut.levels)
+  fcdf$k12_name <- factor(fcdf$k12_name, levels = x)
+  
+  # create the color vector for the x axis
+  # both number of colors (length(rep.vec)) and n times to repeat each color
+  rep.vec <- table(key.df$operon)
+  
+  # make a vector where each color repeats the correct amount of times
+  color.vec <- sapply(1:length(rep.vec), function(y){
+    rep(mycolors[y], rep.vec[y])
+  }) %>% unlist()
+  
+  # randomly add one of the three mutation types to the df, this is only for the purpose
+  # of making their be a color legend of the bottom graph, the layer is drawn underneath
+  # the heatmap so you can't actually see it but the legend shows, which is the intended
+  # effect. seed ensures all three show up,
+
+  set.seed(1)
+
+  mut.vec <- sample(c("Deletion", "SNP", "Insertional\nelement"), nrow(fcdf), replace = TRUE)
+  
+  # add that column
+  fcdf$mtype <- mut.vec
+  
+  # new color bar labels
+  scale.labels <- c(paste("\u2264", paste0("-", threshold), sep = ""),
+                    "",
+                    0,
+                    "",
+                    paste("\u2265", threshold, sep = ""))
+  
+  # finally, make a graph  
+  plot <- fcdf %>%
+    ggplot(., aes(k12_name, line, fill = ds_log2foldchange_rna, label = stars))+
+    geom_point(aes(color = mtype))+
+    geom_raster()+
+    geom_text(size = 3)+
+    scale_fill_gradient2(low = "indianred", high = "steelblue", 
+                         name = expression(paste(log[2], "(fold-change)")),
+                         limits = c(-3, 3),
+                         guide = guide_colorbar(ticks.colour = "black"),
+                         breaks = seq(-3, 3, 1.5),
+                         labels = scale.labels)+
+    theme_bw()+
+    theme(text = element_text(size = 14),
+          panel.grid = element_blank(),
+          axis.text.x = element_text(color = color.vec, angle = 45, hjust = 1, vjust = 1),
+          axis.text.y = element_text(color = mut.colors),
+          panel.background = element_blank(),
+          legend.key = element_blank())+
+    labs(x = NULL,
+         y = NULL,
+         title = fig_letter)+
+    facet_wrap(~ graph_label)+
+    scale_x_discrete(labels = x_labs)+
+    scale_color_manual(values = c(del.color, ins.color, snp.color), name = "Mutation type")
+ 
+  return(plot) 
+}
+```
+
+### Gene plots
+
+The TFs
+```{r}
+genes <- c("flhC", "flhD", "argR", "iclR", "cueR", "cysB", "gcvA", "purR", "arcB", "cusR", "malT")
+
+names(genes) <- genes
+```
+
+This function creates a list of data frames, each list element can be used to make a gene plot. It only requires a named vector of gene names like `c("argR")` where the names are the same as the vector.
+```{r}
+plot.df.list <- lapply(genes, function(x){
+  ## gene position section
+  # find start and stop pos of gene in ancestor
+  gene.in.gff <- anc.gff[!is.na(anc.gff$Name) & anc.gff$Name == x & anc.gff$type == "CDS"]
+  
+  # make a data frame of this to make the rectangle on the plot
+  gene.pos.df <- data.frame(starts = start(gene.in.gff),
+                            ends = end(gene.in.gff),
+                            gene = x)
+  
+  ## snps section
+  # find all the snps positions, NA row ensures presence of a df if no snps present
+  snp.pos.df <- my.mutations %>%
+    filter(grepl(x, gene_list) & type == "SNP") %>%
+    select(population, start_position) %>%
+    dplyr::rename("snp_pos" = start_position) %>%
+    add_case(population = NA, snp_pos = NA)
+  
+  ## dels section
+  # create the data frame for deletions, NA row ensures presence of a df if no dels present
+  del.pos.df <- my.mutations %>%
+    filter(grepl(x, gene_list) & (type == "DEL" | type == "INS")) %>%
+    select(population, start_position, end_position) %>%
+    add_case(population = NA, start_position = NA, end_position = NA)
+  
+  ## mobile element section
+  # create the data frame for insertional elements, NA row ensures presence of a df if no mobs present
+  ins.pos.df <- my.mutations %>%
+    filter(grepl(x, gene_list) & type == "MOB") %>%
+    select(population, start_position, end_position) %>%
+    add_case(population = NA, start_position = NA, end_position = NA)
+  
+  return(list("gene.pos.df" = gene.pos.df, 
+              "snp.pos.df" = snp.pos.df,
+              "del.pos.df" = del.pos.df,
+              "ins.pos.df" = ins.pos.df))
+})
+```
+
+```{r}
+# these could be set as variables, but rect.y.min and max had to be hard coded in in order for me to save as an Rdata object
+rect.y.min <- -.25
+rect.y.max <- .25
+scale.y.min <- -1
+scale.y.max <- 1.5
+
+gene.plots <- lapply(plot.df.list, function(x){
+  # in case you want to only label gene start stop
+  xlabs <- c(x$gene.pos.df$starts, x$gene.pos.df$ends)
+  
+  gene.lab <- x$gene.pos.df$gene[1]
+  
+  ggplot()+
+    geom_rect(data = x$del.pos.df, aes(xmin = start_position, xmax = end_position+3, ymin = -.25, ymax = .25), fill = del.color, color = NA, alpha = .5)+
+    geom_rect(data = x$ins.pos.df, aes(xmin = start_position, xmax = end_position+1, ymin = -.25, ymax = .25), fill = ins.color, color = NA)+
+    geom_rect(data = x$gene.pos.df, aes(xmin = starts, xmax = ends, ymin = -.25, ymax = .25), fill = NA, color = "black")+
+    geom_segment(data = x$snp.pos.df, aes(x = snp_pos, xend = snp_pos, y = -.25, yend = .25), color = snp.color)+
+    geom_text_repel(data = x$snp.pos.df, aes(label = population, x = snp_pos, y = .25), ylim = c(.25, scale.y.max), box.padding = .5, min.segment.length = .001, color = snp.color, segment.alpha = .5)+
+    geom_text_repel(data = x$del.pos.df, aes(label = population, x = start_position, y = -.25), ylim = c(-.25, scale.y.min), box.padding = .5, min.segment.length = .001, color = del.color, segment.alpha = .5)+
+    geom_text_repel(data = x$ins.pos.df, aes(label = population, x = start_position, y = -.25), ylim = c(-.25), box.padding = .5, min.segment.length = .001, color = ins.color, segment.alpha = .5)+
+    theme(panel.background = element_blank(),
+          axis.line.x = element_line(color = "black"),
+          axis.ticks.y = element_blank(),
+          axis.text.y = element_text(color = "black", size = 11))+
+    scale_y_continuous(limits = c(-1, 1.5), breaks = 0, label = gene.lab)+
+    scale_x_continuous(labels = scales::label_number(), breaks = scales::breaks_extended(3))+
+    labs(x = "Base position in ancestor", y = NULL)
+    
+})
+```
+
+### Panel A
+
+Flagella genes
+```{r}
+flg <- c("flhC", "flhD", "flgN", "flgM", "flgA", "flgB", "flgC", "flgD", "flgE", "flgF", "flgG", "flgH", "flgI", "flgJ", "flgK", "flgL", "flhA", "flhB", "flhE")
+
+flg.x.labs <- c(expression(underline("flhC"), underline("flhD"), "flgN", "flgM", "flgA", "flgB", "flgC", "flgD", "flgE", "flgF", "flgG", "flgH", "flgI", "flgJ", "flgK", "flgL", "flhA", "flhB", "flhE"))
+
+names(flg) <- c(rep("fa", 2), rep("fb", 3), rep("fc", 11), rep("fd", 3))
+```
+
+```{r fig.width = 9, fig.height = 5, warning = FALSE, message = FALSE}
+pa.top <- heatmap_function(flg, "Flagellar apparatus", 3, "A", x_labs = flg.x.labs)
+
+pa.bottom <- gene.plots$flhC | gene.plots$flhD
+
+(pa <- (pa.top / pa.bottom) + plot_layout(heights = c(.7, .3)))
+```
+
+### Panel B
+
+Arginine biosynthesis
+```{r}
+arg <- c("argR", "argA", "argC", "argB", "argH", "argD", "argE", "argG", "argI", "carA", "carB")
+
+arg.x.labs <- c(expression(underline("argR"), "argA", "argC", "argB", "argH", "argD", "argE", "argG", "argI", "carA", "carB"))
+
+names(arg) <- c("aa", rep("ab", 3), "ac", "ad", "ae", "af", "ag", "ah", "ai")
+```
+
+```{r fig.width = 9, fig.height = 5, warning = FALSE, message = FALSE}
+pb.top <- heatmap_function(arg, title = "Arginine biosynthesis", threshold = 3, fig_letter = "B", x_labs = arg.x.labs)
+
+pb <- (pb.top / gene.plots$argR) + plot_layout(heights = c(.7, .3))
+```
+
+### Panel C
+
+iclR regulated genes
+```{r}
+iclr <- c("iclR", "arcB", "aceB", "aceA", "aceK")
+
+names(iclr) <- c("ia", "ib", "ic", "ic", "ic")
+
+iclr.x.labs <- c(expression(underline("iclR"), underline("arcB"), "aceB", "aceA", "aceK"))
+```
+
+```{r fig.width = 9, fig.height = 5, warning = FALSE, message = FALSE}
+pc.top <- heatmap_function(iclr, title = "Glyoxylate bypass pathway", threshold = 3, fig_letter = "C", x_labs = iclr.x.labs)
+
+pc.bottom <- (gene.plots$iclR | gene.plots$arcB)
+
+pc <- (pc.top / pc.bottom) + plot_layout(heights = c(.7, .3))
+```
+
+### Panel D
+
+Sulfur compounds
+```{r}
+sulfur <- c("cysB", "cysP", "cysU", "cysW", "cysA", "cysM", "tauA", "tauB", "tauC", "tauD","cysD", "cysN", "cysC", "cysH", "cysI", "cysJ", "tcyP")
+
+s.x.labs <- c(expression(underline("cysB"), "cysP", "cysU", "cysW", "cysA", "cysM", "tauA", "tauB", "tauC", "tauD","cysD", "cysN", "cysC", "cysH", "cysI", "cysJ", "tcyP"))
+
+names(sulfur) <- c("sa", rep("sb", 5), rep("sc", 4), rep("se", 3), rep("sf", 3), "sg")
+```
+
+```{r}
+pd.top <- heatmap_function(sulfur, title = "Sulfur compounds", threshold = 3, fig_letter = "D", x_labs = s.x.labs)
+
+pd <- (pd.top / gene.plots$cysB) + plot_layout(heights = c(.7, .3))
+```
+
+### Panel E
+
+Glycine
+```{r}
+gly <- c("purR", "gcvA", "gcvT", "gcvH", "gcvP", "lpd")
+
+names(gly) <- c("ga", "gb", rep("gc", 3), "gd")
+
+gly.x.labs <- c(expression(underline("purR"), underline("gcvA"), "gcvT", "gcvH", "gcvP", "lpd"))
+```
+
+```{r}
+pe.top <- heatmap_function(x = gly, title = "Glycine cleavage", threshold = 3, fig_letter = "E", x_labs = gly.x.labs)
+
+pe <- (pe.top / (gene.plots$purR | gene.plots$gcvA)) + plot_layout(heights = c(.7, .3))
+```
+
+### Panel F
+
+Copper
+```{r}
+cu <- c("cueR", "cusR", "cusS", "cusC", "cusF", "cusB", "cusA", "copA", "cueO")
+
+cu.x.labs <- c(expression(underline("cueR"), underline("cusR"), "cusS", "cusC", "cusF", "cusB", "cusA", "copA", "cueO"))
+
+names(cu) <- c("ca", "cb", "cb", rep("cc", 4), "cd", "ce")
+```
+
+```{r}
+pf.top <- heatmap_function(cu, title = "Copper/silver transport", threshold = 3, fig_letter = "F", x_labs = cu.x.labs)
+
+pf.bottom <- gene.plots$cueR | gene.plots$cusR
+
+pf <- (pf.top / pf.bottom) + plot_layout(heights = c(.7, .3))
+```
+
+### Final figure
+
+```{r fig.width = 11, fig.height = 15, warning = FALSE, message = FALSE}
+top <- pa | pb
+
+middle <- pc | pd
+
+bottom <- pe | pf
+
+(ff <- (top / middle / bottom) + plot_layout(guides = "collect") & theme(legend.position = "bottom"))
+```
+
+```{r}
+ggsave(ff, filename = "../../figures/fig_s9.pdf", width = 11, height = 15, device = cairo_pdf)
+
+ggsave(ff, filename = "../../figures/fig_s9.png", width = 11, height = 15)
+
+write_rds(ff, file = "../../figures/fig_s9.rds")
+```

@@ -1,0 +1,170 @@
+---
+title: "A-2 ecotype determination"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+```{r message = FALSE, warning = FALSE}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+
+library(tidyverse)
+
+muts <- read_csv("../../data_frames/table_s12_mutations.csv") %>% 
+  filter(population == "Ara-2")
+
+all.data <- read_csv("../../data_frames/all_data.csv")
+```
+
+It's not obvious which ecotype we have. We can match mutations in this clone to mutations that are known to occur in one of the ecotypes, suggestion was to use the 3 S type mutations from this paper https://www.science.org/doi/10.1126/science.1248688, those are in arcA and gntR and spotT. First, confirm these are the gene names I have
+```{r}
+my.genes <- na.omit(unique(all.data$rel_name))
+
+# this returns TRUE if the name of the gene occurs in my data
+sapply(c("arcA", "gntR", "spoT"), function(x){
+  any(my.genes == x)
+})
+```
+
+I have all three, now to see if there are mutations
+```{r}
+lapply(c("arcA", "gntR", "spoT"), function(x){
+  muts %>% 
+    filter(grepl(x, gene_list))
+}) %>% 
+  bind_rows()
+```
+
+It appears that we only have spoT mutations, this suggests that we have the L lineage, table S3 in that paper has genes with mutations unique to L ecotype, but it's a pdf and I don't feel like scraping it so I will just type them
+```{r}
+l.genes <- c(
+  "ampG",
+  "mscK", # kefA
+  "dsbG",
+  "mrdA",
+  "mukB",
+  "ESCRE1299",
+  "kch",
+  "ycjN",
+  "ycjU",
+  "ybcW", # ECB_01513
+  "ECB_01523",
+  "dtpA", # ydgR
+  "gstA", # unclear if gstA or B
+  "gstB", # check both
+  "aspS",
+  "cpsG",
+  "wcaJ",
+  "fbaB",
+  "ECB_02034",
+  "ESCRE2162",
+  "yejA",
+  "ppk",
+  "ESCRE2622",
+  "rpoD",
+  "cyuA", # "yhaM",
+  "rpsE",
+  "selC", # not sure, is a tRNA
+  "ECB_03516", # virus
+  "kup", # "trkD",
+  "nudC",
+  "nrfE",
+  "alsR", # "rpiR",
+  "rpiB",
+  "rnr",
+  "ESCRE4497",
+  "IS1_insB",
+  "fimH",
+  "mraZ",
+  "emrB",
+  "ECB_02798",
+  "dnaG",
+  "plsB",
+  "lptG" # "yjgQ"
+)
+
+# how many of these do I have, only 28
+check.vec <- sapply(l.genes, function(x){
+  any(my.genes == x)
+})
+
+table(check.vec)
+```
+
+Who's missing, can't find these, others are fixed.
+```{r}
+l.genes[check.vec == FALSE]
+```
+
+This doesn't work perfectly because some intergenic ones might be mapped funny, it returns TRUE if 1 or more rows has that gene in the gene_list column
+```{r}
+sapply(l.genes, function(x){
+  # find number of rows when searching for a gene
+  # should be >0 if mutation occurs in that gene
+  rowz <- muts %>% 
+    filter(grepl(x, gene_list)) %>% 
+    nrow()
+  
+  rowz > 0
+}, simplify = FALSE) %>% 
+  unlist() %>% 
+  table()
+```
+
+There are also S specific mutations, one would expect them to not have mutations in any of these but it's hard to say because our clones are quite some time after these. This seems promising though. 
+```{r}
+s.genes <- read_lines("../../data_frames/sgenes.txt") %>% 
+  str_trim()
+
+check.vec2 <- sapply(s.genes, function(x){
+  any(my.genes == x)
+})
+
+# I have most of them
+table(check.vec2)
+
+s.genes[check.vec2 == FALSE]
+
+s.genes[s.genes == "yagR"] <- "paoC"
+s.genes[s.genes == "ydgR"] <- "dtpA"
+s.genes[s.genes == "ypdH"] <- "fryB"
+s.genes[s.genes == "ygjO"] <- "rlmG"
+s.genes[s.genes == "yjdL"] <- "dtpC"
+s.genes[s.genes == "poxA"] <- "epmA"
+s.genes[s.genes == "fimB"] <- "pil"
+
+check.vec2 <- sapply(s.genes, function(x){
+  any(my.genes == x)
+})
+
+# I have all but one after changes
+table(check.vec2)
+```
+
+Good, mostly false.
+```{r}
+sapply(s.genes, function(x){
+  # find number of rows when searching for a gene
+  # should be >0 if mutation occurs in that gene
+  rowz <- muts %>% 
+    filter(grepl(x, gene_list)) %>% 
+    nrow()
+  
+  rowz > 0
+}, simplify = FALSE) %>% 
+  unlist() %>% 
+  table()
+```
+
+It's also missing large deletions found in S from here https://www.pnas.org/doi/full/10.1073/pnas.1207091109. There are supposed to be huge 35 and 41kb deletions in S but not in L, and they don't appear to be in our clone. The large deletions here are nearby, but not the same size or exact same positions. They're likely nearby because their IS element mediated. 
+```{r}
+muts %>% 
+  filter(mutation_category == "large_deletion")%>% 
+  mutate(dw = end_position - start_position)
+```
+
+
+The suggestion is that these are the L lineage.

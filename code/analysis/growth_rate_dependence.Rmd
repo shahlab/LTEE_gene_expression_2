@@ -1,0 +1,281 @@
+---
+title: "Growth rate dependence"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(parallel)
+library(broom)
+library(patchwork)
+library(ggpubr)
+
+mut.levels <- read_csv("../../data_frames/all_data.csv") %>%
+  dplyr::select(line, mutator) %>%
+  arrange(mutator, line) %>%
+  unique() %>%
+  pull(line)
+
+mut.colors <- c("black", rep("black", 5), rep("firebrick3", 5))
+```
+
+We're going to use data from this paper https://www.embopress.org/doi/full/10.15252/msb.20145108?download=true, specifically supplementary datasets 1 and 2, which were downloaded from that page because they were not playing nicely with wget. In the `../../data_frames/SF1-EcoMAC` folder are the expression data and the column names and rows in separate files. I'll use them to make a single dataset.
+```{r}
+# these are the row names
+rows <- read_tsv("../../data_frames/SF1-EcoMAC/numbering_assembly-tfs-enzymes-genes.txt", col_names = c("rn", "id", "gene"))
+
+# these are the columns
+column.names <- read_delim("../../data_frames/SF1-EcoMAC/numbering_arrays-compendium.txt", col_names = c("rn", "dataset"), delim = " ") %>% 
+  pull(dataset)
+
+expr.data <- read_tsv("../../data_frames/SF1-EcoMAC/Ecoli-compendium-assembly-quantilenorm.txt", col_names = column.names) %>% 
+  cbind(rows) %>% 
+  select(id, gene, everything())
+
+head(expr.data)
+```
+
+The growth rates are in a separate excel sheet.
+```{r}
+g.rates <- read_xlsx("../../data_frames/SF1-EcoMAC/msb145108-sup-0005-datasets2.xlsx", sheet = 2) %>% 
+  arrange(`Column array (EcoMAC)`)
+
+names(g.rates) <- str_replace_all(names(g.rates), " ", "_") %>% 
+  str_remove_all(., "\\(") %>% 
+  str_remove_all(., "\\)") %>% 
+  str_remove(., "/") %>% 
+  tolower()
+```
+
+Reshape the expression data
+```{r}
+expr.data2 <- expr.data %>% 
+  pivot_longer(cols = where(is.numeric), names_to = "cel_file_name")
+
+head(expr.data2)
+```
+
+We filter the data to datasets which have a recorded growth rate, are in exponential phase, the growth rate !=1 because it's not clear why there are so many values exactly equal to one, and there are no mutations to genes (or it's GFP).
+```{r}
+rates.only <- g.rates %>%
+  # filter(
+  #   flag_growth == 1 &
+  #     (time_min %in% c("mid-log phase", "exponential") | is.na(time_min)) & 
+  #     growth_rate_1h != 1 &
+  #     (gene_perturbated %in% c("WT", "GFP") | is.na(gene_perturbated))
+  # ) %>%
+  filter(flag_growth == 1) %>% 
+  select(
+    cel_file_name,
+    geo_accession,
+    medium,
+    treatment_value,
+    treatment_conditions,
+    time_min,
+    growth_rate_1h
+  )
+```
+
+Join the rates and file IDs together.
+```{r}
+rates.expr <- right_join(expr.data2, rates.only, by = "cel_file_name")
+
+head(rates.expr)
+```
+
+For each gene, run a linear model to predict expression from growth rate.
+```{r}
+# split the data into a list where each element is the data for one gene
+gene.df.list <- rates.expr %>% 
+  split(.$gene)
+
+name_repair_func <- function(x){
+  str_remove_all(x, "\\(") %>% 
+    str_remove_all(., "\\)") %>% 
+    str_replace_all("\\.", "_") %>% 
+    tolower()
+}
+
+models <- mclapply(gene.df.list, function(x){
+  lm(value ~ growth_rate_1h, data = x) %>% 
+    broom::tidy() %>% 
+    pivot_wider(names_from = term, values_from = where(is.numeric), names_repair = name_repair_func)
+}, mc.cores = 8) %>% 
+  bind_rows(.id = "gene") %>% 
+  rename("k12_name" = "gene")
+```
+
+Get my RNASeq fold changes
+```{r}
+all.data <- read_csv("../../data_frames/all_data.csv") %>% 
+  filter(gene_type == "ECB") %>% 
+  select(line, target_id, k12_name, ds_padj_rna, ds_log2foldchange_rna)
+```
+
+How many matches on genes names are there? Reduce the model data frame to only those genes and models that have estimates and p.values and add a q-value column (they all do). 
+```{r}
+length(intersect(all.data$k12_name, models$k12_name))
+
+models.filt <- models %>% 
+  filter(k12_name %in% unique(all.data$k12_name) & !is.na(estimate_growth_rate_1h) & !is.na(p_value_growth_rate_1h))
+
+models.filt$qval_growth_rate_1h <- p.adjust(models.filt$p_value_growth_rate_1h)
+```
+
+Join the models and fold changes, add columns to denote the direction of the estimate_growth_rate_1h and the line order. The result is a df where we can relate estimates to fold changes, save it.
+```{r}
+joined.df <- left_join(all.data, models.filt, by = "k12_name") %>% 
+  mutate(model_direc = factor(sign(estimate_growth_rate_1h)),
+         line = factor(line, mut.levels))
+
+head(joined.df)
+
+write_csv(joined.df, "../../data_frames/growth_depend_df.csv")
+```
+
+### Panel A
+
+I think the growth rates given here are the proportion of an hour that it takes them to divide, i.e. a value of 0.5 = 30 min, meaning 1/value = number of division per hour. Given the previous values, a negative relationship means the gene is positively regulated by growth. **Apparently this is wrong though.**
+```{r fig.width = 12, fig.height = 8}
+rates.expr %>% 
+  filter(grepl("rp[s]", gene)) %>% 
+  ggplot(., aes(growth_rate_1h, value))+
+  geom_smooth(method = "lm", se = FALSE)+
+  geom_point(size = 1)+
+  facet_wrap(~gene, scales = "free")
+  
+```
+
+```{r fig.width = 2, fig.height = 3}
+rates.expr %>% 
+  select(cel_file_name, geo_accession, growth_rate_1h) %>% 
+  unique() %>% 
+  ggplot(., aes(x = "", growth_rate_1h))+
+  geom_jitter(height = 0)+
+  labs(y = "1/growth_rate_1h",
+       x = "")
+```
+
+
+```{r fig.width = 12, fig.height = 9}
+rates.expr %>% 
+  filter(grepl("rps", gene)) %>% 
+  ggplot(., aes(growth_rate_1h, value))+
+  geom_point(size = 1)+
+  geom_smooth(color = "red", method = "lm")+
+  facet_wrap(~gene, scales = "free")
+```
+
+### Panel A
+
+Example models of a growth dependent and growth independent gene
+```{r fig.width = 6, fig.height = 3.5}
+genes.ordered.by.abs.estimate_growth_rate_1h <- models.filt %>% 
+  filter(p_value_growth_rate_1h <= .1) %>% 
+  arrange(desc(abs(estimate_growth_rate_1h)), p_value_growth_rate_1h) %>% 
+  pull(k12_name)
+
+pa <- rates.expr %>% 
+  filter(gene == genes.ordered.by.abs.estimate_growth_rate_1h[1] | gene == genes.ordered.by.abs.estimate_growth_rate_1h[length(genes.ordered.by.abs.estimate_growth_rate_1h)]) %>% 
+  ggplot(., aes(growth_rate_1h, value))+
+  geom_point(size = 1)+
+  geom_smooth(color = "red", method = "lm")+
+  facet_wrap(~gene, ncol = 2, scales = "free")+
+  theme_bw()+
+  theme(text = element_text(size = 14),
+        panel.grid = element_blank())+
+  labs(x = "Growth rate",
+       y = "Expression",
+       title = "A")+
+  stat_cor(label.x.npc = .33, label.y.npc = .959)
+
+pa
+```
+
+### Panel B
+
+KS test the two categories.
+```{r}
+ks.results <- joined.df %>%
+  split(.$line) %>%
+  map(function(x) {
+    ks.test(x[x$model_direc == 1, ]$ds_log2foldchange_rna,
+            x[x$model_direc == -1, ]$ds_log2foldchange_rna) %>%
+      tidy()
+  }) %>% 
+  bind_rows(.id = "line") %>% 
+  mutate(stars = cut(
+    p.value,
+    c(1, .05, .01, .001, .0001, -Inf),
+    labels = c("****", "***", "**", "*", "NS")
+  ))
+```
+
+For each direction of model estimate_growth_rate_1h, what does the fold change distribuition look like?
+```{r fig.width = 6, fig.height = 3.5}
+pb <- joined.df %>% 
+  filter(!is.na(model_direc) & ds_padj_rna <= .01) %>% 
+  ggplot(., aes(line, ds_log2foldchange_rna, fill = model_direc))+
+  geom_hline(aes(yintercept = 0), linetype = 5)+
+  geom_boxplot(outlier.size = 1)+
+  theme_bw()+
+  theme(panel.grid = element_blank(),
+        text = element_text(size = 14),
+        axis.text.x = element_text(color = mut.colors),
+        legend.position = "bottom",
+        legend.background = element_blank())+
+  scale_fill_manual(values = c("indianred", "steelblue"), name = "Growth regulation", labels = c("Negative", "Positive"))+
+  labs(x = NULL,
+       y = expression(paste(log[2], "(fold-change)")),
+       title = "B")+
+  scale_y_continuous(breaks = seq(-15,10, 5))
+
+pb
+```
+
+### Panel C
+
+The reverse, for each fold change direction, what is the distribution of estimates?
+```{r fig.width = 6, fig.height = 3.5}
+pc <- joined.df %>% 
+  filter(!is.na(model_direc) & !is.na(ds_log2foldchange_rna) & ds_padj_rna <= .01 & p_value_growth_rate_1h <= .1) %>% 
+  mutate(fcdirec = ifelse(ds_log2foldchange_rna > 0, "Upregulated", "Downregulated")) %>% 
+  ggplot(., aes(line, estimate_growth_rate_1h, fill = fcdirec))+
+  geom_hline(aes(yintercept = 0), linetype = 5)+
+  geom_boxplot(outlier.size = 1)+
+  theme_bw()+
+  theme(panel.grid = element_blank(),
+        text = element_text(size = 14),
+        axis.text.x = element_text(color = mut.colors),
+        legend.position = "bottom")+
+  scale_fill_manual(values = c("indianred", "steelblue"), name = NULL)+
+  labs(x = NULL,
+       y = "Slope",
+       title = "C")
+
+pc
+```
+
+I'm not so sure about the growth rate == 1 values
+```{r, fig.width = 11, fig.height = 8}
+(pa | pb) / pc
+```
+

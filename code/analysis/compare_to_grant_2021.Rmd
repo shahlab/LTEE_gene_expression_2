@@ -1,0 +1,190 @@
+---
+title: "Compare to Grant 2021"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+Load packages
+```{r}
+library(tidyverse)
+```
+
+This document creates a data frame that allows us to compare our data to that of another paper, Grant 2021 (https://journals.asm.org/doi/10.1128/JB.00469-20). I've cloned the github repo for that paper below. **Pay attention** this is supposed to place this repo at the top of the directory tree, i.e. it should be in the same place as directories `alignment` and `code`. If it doesn't do that, the rest of the document won't work. This chunk is set to not run because otherwise it keeps trying to clone into something that already exists. You'll need to set `eval = TRUE` if you want things to run when knitting.
+```{bash eval = FALSE}
+cd ../.. 
+git clone https://github.com/NkrumahG/LTEE-cell-size-shape.git
+```
+
+We need the data behind figure 5 which comes from code in `2h-24h-cell-size-analysis.R`. In order to make this document self contained, as in it runs without needing to run code from another document, I'm pasting that code below exactly as it's found in the file, from line 22 to line 96, because of this, I need to make one alteration on the first line, which is to specify the directory where the files are (the same one the script is present in). This
+```{r}
+# original line
+# CoultClones <-  list.files(pattern = "*.CSV")
+
+# new line
+CoultClones <- list.files("../../LTEE-cell-size-shape/2h.24h-cell-size-csv", pattern = "*.CSV", full.names = TRUE)
+
+CoultCol.namesClones <- c( "x", "seconds", "fL", "um", "population", "generation", "block", "time")
+
+#Here I import the data placing lower and upper bouds on the data at the onset
+Coulter.dataClones <- as.data.frame(setNames(do.call(rbind,Map('cbind', lapply(CoultClones, read.csv, skip = 274), V4= CoultClones, V5=CoultClones, V6=CoultClones, V7=CoultClones)), CoultCol.namesClones))  %>%  
+  subset(fL > 0.200 & fL < 6.00)
+
+#Extrating generation informaiton from the file name
+Coulter.dataClones$generation <- as.factor(gsub("_.*","",Coulter.dataClones$generation))
+
+#Extracting population information from the file name and change data order 
+Coulter.dataClones$population <- as.factor(gsub(".*K_|_2020.*","",Coulter.dataClones$population))
+Coulter.dataClones$population <- factor(Coulter.dataClones$population, levels = c("606", "M1", "M2", "M3", "M4", "M5", "M6", "607","P1","P2","P3","P4","P5","P6"))
+
+#Change how populations are named
+Coulter.dataClones$population <- gsub("M", "Ara-",Coulter.dataClones$population)
+Coulter.dataClones$population <- gsub("P", "Ara+",Coulter.dataClones$population)
+Coulter.dataClones$population <- gsub("606", "REL606",Coulter.dataClones$population)
+Coulter.dataClones$population <- gsub("607", "REL607",Coulter.dataClones$population)
+
+#Assigning a block number based upon date completed
+Coulter.dataClones$block <- as.factor(gsub("^.*2020-01-24.*$","1",Coulter.dataClones$block)) #2h block 1 
+Coulter.dataClones$block <- as.factor(gsub("^.*2020-01-25.*$","1",Coulter.dataClones$block)) #24h block 1
+Coulter.dataClones$block <- as.factor(gsub("^.*2020-02-05.*$","2",Coulter.dataClones$block)) #2h block 2
+Coulter.dataClones$block <- as.factor(gsub("^.*2020-02-06.*$","2",Coulter.dataClones$block)) #24h block 2
+Coulter.dataClones$block <- as.factor(gsub("^.*2020-02-14.*$","3",Coulter.dataClones$block)) #2h block 3
+Coulter.dataClones$block <- as.factor(gsub("^.*2020-02-15.*$","3",Coulter.dataClones$block)) #24h block 3
+
+#Assigning a time based upon date completed
+Coulter.dataClones$time <- as.factor(gsub("^.*2020-01-24.*$","Mid-exponential",Coulter.dataClones$time)) #2h block 1 
+Coulter.dataClones$time <- as.factor(gsub("^.*2020-01-25.*$","Stationary phase",Coulter.dataClones$time)) #24h block 1
+Coulter.dataClones$time <- as.factor(gsub("^.*2020-02-05.*$","Mid-exponential",Coulter.dataClones$time)) #2h block 2
+Coulter.dataClones$time <- as.factor(gsub("^.*2020-02-06.*$","Stationary phase",Coulter.dataClones$time)) #24h block 2
+Coulter.dataClones$time <- as.factor(gsub("^.*2020-02-14.*$","Mid-exponential",Coulter.dataClones$time)) #2h block 3
+Coulter.dataClones$time <- as.factor(gsub("^.*2020-02-15.*$","Stationary phase",Coulter.dataClones$time)) #24h block 3
+
+# a line I've added to save the unfiltered data
+unfiltered.data <- Coulter.dataClones
+
+#What are the fifth and 95th percentiles of the data between the initial bounds of input data?
+
+#5th?
+Coulter.dataClones <- Coulter.dataClones %>%  group_by(population, generation, block, time) %>% 
+  mutate(fifth = quantile(fL, probs = (.05)))
+
+min(Coulter.dataClones$fifth) #.207
+
+#95th?
+Coulter.dataClones <- Coulter.dataClones %>%  group_by(population, generation, block, time) %>% 
+  mutate(ninety_fifth = quantile(fL, probs = (.95)))
+
+max(Coulter.dataClones$ninety_fifth) #5.6594
+
+#Now filter dataset keeping only the middle 90% of cell size data  (0.21 <= fL <= 5.66)
+Coulter.dataClones <- as.data.frame(Coulter.dataClones %>%  group_by(population, generation, block, time) %>%
+  subset(fL > 0.207 & fL < 5.6594))
+
+#Code for calculating standard deviation of a population
+#https://www.dummies.com/education/math/statistics/standard-deviation-r/
+
+sd.p=function(x){sd(x)*sqrt((length(x)-1)/length(x))}
+
+d1 <- as.data.frame(Coulter.dataClones %>% group_by(population,block,time) %>% 
+  summarise(n=n(), median.fL = median(fL), mean.fL = mean(fL), sd.p.fL = sd.p(fL), sd.fL = sd(fL)))
+
+#Order the populations 
+d1$population <- factor(d1$population, levels = c("REL606", "Ara-1", "Ara-2", "Ara-3", "Ara-4", "Ara-5", "Ara-6", "REL607","Ara+1","Ara+2","Ara+3","Ara+4","Ara+5","Ara+6"))
+
+#True minus between population levels
+levels(d1$population) <- c("REL606", "Ara−1", "Ara−2", "Ara−3", "Ara−4", "Ara−5", "Ara−6", "REL607","Ara+1","Ara+2","Ara+3","Ara+4","Ara+5","Ara+6")
+d1$time <- factor(d1$time,levels = c("Mid-exponential", "Stationary phase"))
+levels(d1$time) <- c("Exponential", "Stationary")
+
+#Plot median estimate of cell size for each replicate and the confidence intervals 
+
+d1 %>% ggplot(aes(x = population, y = median.fL, colour = time, group=time)) + 
+  geom_point(size = 2) +
+  stat_summary(fun = mean, fun.min = mean, fun.max = mean, geom = "crossbar", position="identity", color = "red", width = .5, size=.3) +
+  labs(x= "Population", y= "Median cell volume (fL)") +
+  scale_y_continuous(limits=c(0,3.2), breaks = seq(.2,3.2,.6)) +
+  scale_color_manual(values = c("Exponential" = "Black", "Stationary" = "Grey"), name = "") +
+  theme_classic()+
+  theme(legend.position = "top") +
+  theme(axis.text.x = element_text(colour = "black", size = 14, margin = (margin(t = 3, b=5)), angle = (90), vjust = .5)) +
+  theme(axis.title.x = element_text( size = 14)) +
+  theme(axis.text.y = element_text(colour = "black",  size = 14, margin = (margin(l = 5, r=5)))) +
+  theme(axis.title.y = element_text( size = 14)) +
+  theme(legend.text = element_text( size = 14)) +
+  theme(legend.title = element_text(size = 14)) +
+  theme(panel.border = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))
+```
+
+They take the mean of the medians, their filtering has almost no effect on this number. 
+```{r}
+mean.of.meds <- d1 %>% 
+  filter(time == "Exponential") %>%
+  mutate(population = as.character(population)) %>% 
+  group_by(population) %>% 
+  summarise(mean_of_medians = mean(median.fL)) %>% 
+  ungroup() %>% 
+  rename("line" = "population")
+
+mean.of.meds
+```
+
+Somehow, `Coulter.dataClones` and `mean.of.meds` can't join on the line column. I've narrowed this down to the fact that the dash in `mean.of.meds` is longer than the one in `Coulter.dataClones`. This "−" vs this "-", the second one is the one that comes out of my keyboard whereas the first is copied from the table above. I assume this is due to differences in OS or something but I don't know. Either way, it has to get corrected.  
+```{r}
+mean.of.meds <- mean.of.meds %>% 
+  mutate(line = str_replace(line, "−", "-"))
+```
+
+This yields a data frame with all of their data (the filtered data, at least) plus the mean of medians which is what they graph and what we compare to. 
+```{r}
+df.to.save <- Coulter.dataClones %>%
+  filter(time == "Mid-exponential") %>% 
+  select(population, fL) %>% 
+  rename("line" = "population") %>% 
+  left_join(mean.of.meds, by = "line")
+
+head(df.to.save)
+```
+
+Save it
+```{r}
+write_csv(df.to.save, "../../data_frames/grant_2021_median_volumes.csv")
+```
+
+The filtering they do doesnt make so much of a difference, their data is naturally in that range.
+```{r fig.width = 10, fig.height = 5}
+filt <- Coulter.dataClones %>%
+  filter(time == "Mid-exponential") %>% 
+  select(population, fL) 
+
+unfilt <- unfiltered.data %>%
+  ungroup() %>% 
+  filter(time == "Mid-exponential") %>% 
+  select(population, fL) 
+
+
+bind_rows("filtered" = filt,
+          "unfiltered" = unfilt,
+          .id = "sample") %>% 
+  ggplot(., aes(population, fL, fill = sample))+
+  geom_boxplot(outlier.size = .5)
+```
+
+```{r}
+sessionInfo()
+```
+

@@ -1,0 +1,147 @@
+---
+title: "Riborex"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1100px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+```{r}
+library(tidyverse)
+library(riborex)
+```
+
+Mark insertional elements. We can't be sure which genomic copy of an insertional element a read is coming from.
+```{r}
+bdf <- read_csv("../../data_frames/biocyc_df.csv")
+
+# list all the insertional elements
+bdf %>%
+  filter(grepl("ins", rel_name))
+
+# get their target_ids
+ins.elements <- bdf %>%
+  filter(grepl("ins", rel_name)) %>%
+  pull(target_id)
+```
+
+This document runs riborex. It's similar to the one that runs DESeq2.
+```{r}
+# load the kallisto results and reshape it slightly, filter tRNA, ERCC, viruses
+kdf <- read_csv("../../data_frames/table_s1_read_counts.csv") %>% 
+  select(repl, seqtype, line, target_id, est_counts) %>% 
+  unite("sample", c(seqtype, line, repl), sep = "_") %>% 
+  filter(grepl("ECB_", target_id) & !(target_id %in% ins.elements))
+
+head(kdf)
+```
+
+Create a vector of only the evolved samples that only contains the line name. The ancestors result in NA for this regex and are removed.
+```{r}
+line.names <- unique(str_extract(unique(kdf$sample), "Ara[-+][1-6]"))
+
+line.names <- line.names[!is.na(line.names)]
+
+names(line.names) <- line.names
+
+line.names
+```
+
+Reshape the counts
+```{r}
+wide.kdf <- kdf %>% 
+  pivot_wider(names_from = sample, values_from = est_counts)
+
+head(wide.kdf)
+```
+
+The riborex column order
+```{r}
+conds <- factor(c(rep("evo", 2), rep("anc", 4)), levels = c("anc", "evo"))
+```
+
+```{r}
+rr.list <- lapply(line.names, function(x){
+  ## get the RNAseq datasets
+  # the rna line we're looking for
+  rna.line <- paste0("rna_", x)
+    
+  # the RNAseq counts table, convert to matrix
+  rna <- wide.kdf %>% 
+    select(target_id, starts_with(rna.line), starts_with("rna_REL")) %>%   # pick the correct columns, one evo and both anc
+    mutate_if(is.double, as.integer) %>%                                   # convert cols to integers
+    column_to_rownames("target_id") %>%                                    # gene ids to rownames
+    as.matrix()                                                            # change to a matrix
+  
+  ## get the riboseq datasets
+  # the ribo line we're looking for
+  ribo.line <- paste0("ribo_", x)
+    
+  # the riboseq counts table, convert to matrix
+  ribo <- wide.kdf %>% 
+    select(target_id, starts_with(ribo.line), starts_with("ribo_REL")) %>% #
+    mutate_if(is.double, as.integer) %>% 
+    column_to_rownames("target_id") %>% 
+    as.matrix()
+  
+  ## run riborex
+  rrr <- riborex(rnaCntTable = rna,
+                 riboCntTable = ribo,
+                 rnaCond = conds,
+                 riboCond = conds)
+  
+  # convert to data frame with no rownames
+  rdf <- as_tibble(rrr, rownames = "target_id")
+  
+  return(rdf)
+})
+```
+
+Join the results together
+```{r}
+rrdf <- bind_rows(rr.list, .id = "line")
+```
+
+As in DESeq, change the deleted genes fold changes and padj to NA. Additionally, add a column that denotes significance at .01.
+```{r}
+dels.df <- read_csv("../../data_frames/del_per_line.csv") %>% 
+  mutate(deleted = TRUE)
+
+# join the data frames
+rrdf2 <- left_join(rrdf, dels.df, by = c("line", "target_id"))
+
+# change NAs to FALSE
+rrdf2$deleted[is.na(rrdf2$deleted)] <- FALSE
+
+# change the fold change to NA if deleted
+rrdf3 <- rrdf2 %>% 
+  mutate(log2FoldChange = ifelse(deleted == TRUE, NA, log2FoldChange),
+         padj = ifelse(deleted == TRUE, NA, padj),
+         sig = ifelse(is.na(padj) | padj > .01, FALSE, TRUE))
+
+head(rrdf3)
+```
+
+Save it
+```{r}
+write_csv(rrdf3, "../../data_frames/table_s7_riborex_results.csv")
+```
+
+```{r}
+sessionInfo()
+```
+

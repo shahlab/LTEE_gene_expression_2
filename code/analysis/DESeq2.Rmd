@@ -1,0 +1,153 @@
+---
+title: "DEseq2"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1100px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+Here, we run DESeq2. This will eventually require a matrix per line where the columns are target_id, evolved line counts, ancestral counts.
+```{r}
+library(tidyverse)
+library(DESeq2)
+```
+
+Mark insertional elements. We can't be sure which genomic copy of an insertional element a read is coming from.
+```{r}
+bdf <- read_csv("../../data_frames/biocyc_df.csv")
+
+# list all the insertional elements
+bdf %>%
+  filter(grepl("ins", rel_name))
+
+# get their target_ids
+ins.elements <- bdf %>%
+  filter(grepl("ins", rel_name)) %>%
+  pull(target_id)
+```
+
+```{r}
+# load the kallisto results and reshape it slightly, filter removes ERCC controls tRNAs, viruses
+kdf <- read_csv("../../data_frames/table_s1_read_counts.csv") %>% 
+  select(repl, seqtype, line, target_id, est_counts) %>% 
+  unite("sample", c(seqtype, line, repl), sep = "_") %>% 
+  filter(grepl("ECB_", target_id) & !(target_id %in% ins.elements))
+
+head(kdf)
+```
+
+Create a vector of only the evolved samples that only contains the line and seqtype. The ancestors result in NA for this regex and are removed.
+```{r}
+line.names <- unique(str_extract(unique(kdf$sample), "[a-z]{3,4}_Ara[-+][1-6]"))
+
+line.names <- line.names[!is.na(line.names)]
+
+names(line.names) <- line.names
+
+line.names
+```
+
+Reshape the counts
+```{r}
+wide.kdf <- kdf %>% 
+  pivot_wider(names_from = sample, values_from = est_counts)
+
+head(wide.kdf)
+```
+
+Create a list of the data structures that are needed for DESeq, namely a data frame of target_id, evo1_counts, evo2_counts, anc1_counts, anc2_counts, anc3_counts, anc_4_counts. This results in a list where the names of the list elements are the line and seqtype and each element is the data structure. This enforces a column order of evo, evo, anc, anc, anc, anc, which is important for DESeq.
+```{r}
+df.list <- lapply(line.names, function(x){
+  # what seqtype is this?
+  seqtype <- unlist(str_split(x, "_"))[1]
+  
+  # we only need ancestral data from that seqtype
+  anc.to.pick <- paste(seqtype, "REL", sep = "_")
+  
+  # create the data structure
+  wide.kdf %>%
+    select(target_id, starts_with(x), starts_with(anc.to.pick)) %>% # pick the correct columns, one evo and both anc
+    mutate_if(is.double, as.integer) %>%                            # convert cols to integers
+    column_to_rownames("target_id") %>%                             # gene ids to rownames
+    as.matrix()                                                     # change to a matrix
+})
+
+head(df.list[[1]])
+```
+
+Run DESeq. The data frame that denotes the conditions of each column
+```{r}
+(conds.df <- data.frame(condition = factor(c(rep("evo", 2), rep("anc", 4)), levels = c("anc", "evo"))))
+```
+
+Run DESeq.
+```{r}
+deseq.list <- lapply(df.list, function(x){
+  d1 <- DESeqDataSetFromMatrix(countData = x,
+                               colData = conds.df,
+                               design = ~condition)
+  
+  d2 <- DESeq(d1)
+
+  d3 <- lfcShrink(d2,
+                  coef = 2,
+                  type = "apeglm")
+  
+  # return the results as a data frame with no rownames
+  d4 <- as_tibble(d3, rownames = "target_id")
+
+  return(d4)
+})
+```
+
+Join them to a single data frame.
+```{r}
+deseq.df <- bind_rows(deseq.list, .id ="sample") %>% 
+  separate(sample, into = c("seqtype", "line"), sep = "_")
+```
+
+Set the fold changes of genes that were deleted in some way to NA because DESeq assigns them some fold change anyway. This is accomplished by joining to the deletions data frame made in another Rmd. Any column with an NA in the resulting join does not have a deletion. Additionally, add a column that denotes significance at .01.
+```{r}
+dels.df <- read_csv("../../data_frames/del_per_line.csv") %>% 
+  mutate(deleted = TRUE)
+
+# join the data frames
+deseq.df2 <- left_join(deseq.df, dels.df, by = c("line", "target_id"))
+
+# change NAs to FALSE
+deseq.df2$deleted[is.na(deseq.df2$deleted)] <- FALSE
+
+# change the fold change and padj to NA if deleted
+deseq.df3 <- deseq.df2 %>% 
+  mutate(log2FoldChange = ifelse(deleted == TRUE, NA, log2FoldChange),
+         padj = ifelse(deleted == TRUE, NA, padj),
+         sig = ifelse(is.na(padj) | padj > .01, FALSE, TRUE))
+
+head(deseq.df3)
+```
+
+Save it
+```{r}
+write_csv(deseq.df3, "../../data_frames/table_s2_fold_changes.csv")
+```
+
+```{r}
+sessionInfo()
+```
+
+
+

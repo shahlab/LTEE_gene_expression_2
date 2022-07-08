@@ -1,0 +1,144 @@
+---
+title: "Figure S5"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+```{r}
+library(tidyverse)
+library(patchwork)
+library(ggpubr)
+library(scales)
+library(ggpointdensity)
+library(ggrepel)
+
+ercc.df <- read_csv("../../data_frames/table_s5_ercc_molecules_per_sample.csv") %>% 
+  filter(line != "Ara+6")
+
+mrna.per.cfu.df <- read_csv("../../data_frames/table_s6_mRNAs_per_cfu.csv") %>% 
+  filter(line != "Ara+6")
+```
+
+### Panel A
+
+All the linear models
+```{r}
+pa <- ercc.df %>%
+  filter(seqtype == "rna") %>%
+  ggplot(., aes(molecules_of_seq, tpm, color = repl))+
+  geom_point(size = 1)+
+  geom_smooth(method = "lm", se = FALSE, size = 1)+
+  stat_cor(aes(label = ..r.label..), show.legend = FALSE, label.x.npc = .01, label.y.npc = .99)+
+  scale_y_log10(breaks = c(10^-2, 10^0, 10^2), labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+  scale_x_log10(breaks = c(1e4, 1e6, 1e8), labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+  theme_bw()+
+  theme(panel.background = element_blank(),
+        text = element_text(size = 14),
+        legend.key = element_blank(),
+        legend.background = element_blank(),
+        panel.grid = element_blank(),
+        legend.position = c(.93, .25))+
+  scale_color_manual(values = c("black", "grey60"),
+                     name = NULL,
+                     labels = c("Rep 1", "Rep 2"))+
+  labs(y = expression(paste(log[10], "(TPM)")),
+       x = expression(paste(log[10], "(molecules of ERCC oligo added)")),
+       title = "A")+
+  facet_wrap(~line, ncol = 7)
+
+pa
+```
+
+### Panel B
+
+The rest of the scatterplots from 2C
+```{r}
+mols.per.cfu.df <- read_csv("../../data_frames/table_s6_mRNAs_per_cfu.csv")
+
+head(mols.per.cfu.df)
+```
+
+Compute an ancestral average molecules_per_cfu from the 4 ancestral samples.
+```{r}
+anc.means <- mols.per.cfu.df %>% 
+  filter(line %in% c("REL606", "REL607")) %>% 
+  group_by(target_id) %>% 
+  summarise(anc_mean_mol_per_cfu = mean(n_mol_per_cfu))
+
+head(anc.means)
+```
+
+The data frame for the plot, shows the average molecules per cfu for one line compared to that of the ancestors. 
+```{r}
+ddf <- mols.per.cfu.df %>% 
+  filter(!(str_detect(line, "REL"))) %>% 
+  group_by(line, target_id) %>% 
+  summarise(mean_mol_per_cfu = mean(n_mol_per_cfu)) %>%
+  left_join(anc.means, by = "target_id")
+
+head(ddf)
+```
+
+Make the plot.
+```{r}
+pb <- ddf %>% 
+  ggplot(., aes(anc_mean_mol_per_cfu, mean_mol_per_cfu))+
+  geom_abline(aes(slope = 1, intercept= 0), linetype = 5)+
+  geom_point(size = 1)+ # double plot points to ensure that points on axis show up
+  geom_pointdensity(size = 1)+
+  scale_x_log10(limits = c(1e-4, 2e4), breaks = c(1e-3, 1e0, 1e3), labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+  scale_y_log10(limits = c(1e-4, 2e4), breaks = c(1e-3, 1e0, 1e3), labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+  theme_bw()+
+  theme(text = element_text(size = 14),
+        panel.grid = element_blank(),
+        legend.position = c(.92, .19),
+        legend.key.size = unit(4, "mm"),
+        legend.background = element_blank())+
+  labs(x = "Molecules / CFU ancestor",
+       y = "Molecules / CFU evolved",
+       title = "B")+
+  facet_wrap(~line, ncol = 6)+
+  scale_color_viridis_c(option = "B",
+                        name = "Neighboring\npoints")+
+  stat_cor(aes(label = ..r.label..))
+
+pb
+```
+
+### Final figure
+
+```{r fig.width = 11, fig.height = 8.5}
+ff <- (pa / pb) + plot_layout(heights = c(.45, .55))
+
+ff
+```
+
+Save it in various formats
+```{r}
+ggsave(ff, filename = "../../figures/fig_S5.png", width = 11, height = 8.5)
+
+ggsave(ff, filename = "../../figures/fig_S5.pdf", device = cairo_pdf, width = 11, height = 8.5)
+
+write_rds(ff, "../../figures/fig_s5.rds")
+```
+
+```{r}
+sessionInfo()
+```
+

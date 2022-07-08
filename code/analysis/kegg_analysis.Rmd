@@ -1,0 +1,156 @@
+---
+title: "KEGG analysis"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r warning = FALSE, message = FALSE}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+Read in packages and necessary data
+```{r}
+library(tidyverse)
+library(clusterProfiler)
+
+all.data <- read_csv("../../data_frames/all_data.csv") %>% 
+  filter(gene_type == "ECB")
+```
+
+### Observed
+
+**For this analysis, deletions are represented as having a fold change of -10**, for an analysis of how specifically picking -10 affects the results, you can see the Rmd at `code/analysis/kegg_sensitivity.Rmd`.
+```{r}
+fc.df <- all.data %>%
+  select(line, target_id, ds_log2foldchange_rna, ds_log2foldchange_ribo, deleted) %>% 
+  mutate(ds_log2foldchange_rna = ifelse(deleted == TRUE, -10, ds_log2foldchange_rna),
+         ds_log2foldchange_ribo = ifelse(deleted == TRUE, -10, ds_log2foldchange_ribo))
+```
+
+This requires a named vector where the elements of the vector are fold change in decreasing order and the names are the target_id's. This is done only on ECB type genes, i.e. protein coding, not tRNA or ERCC.
+```{r}
+fcs.vecs <- fc.df %>% 
+  # only need these cols
+  select(line, target_id, ds_log2foldchange_rna, ds_log2foldchange_ribo) %>%
+  # reshape to be able to split by two things
+  pivot_longer(., col = starts_with("ds_"), names_to = "seqtype", values_to = "l2fc") %>%
+  # remove unnecessary string to leave just seqtype 
+  mutate(seqtype = str_remove(seqtype, "ds_log2foldchange_")) %>%
+  # split based on line/seqtype
+  split(list(.$line, .$seqtype)) %>%
+  map(function(x){
+    # place in desc order
+    df <- x %>%
+      filter(!is.na(l2fc)) %>%
+      arrange(desc(l2fc))
+    
+    # vec of fold changes  
+    fcs <- pull(df, l2fc)
+    
+    # name that
+    names(fcs) <- df$target_id
+    
+    return(fcs)
+  })
+```
+
+Run the clusterprofiler function. 
+```{r}
+kegg.df.list.dels <- lapply(fcs.vecs, function(x){
+  gse <- gseKEGG(x,
+                 organism = "ebr",
+                 minGSSize = 2,
+                 maxGSSize = 1000,
+                 pvalueCutoff = 1,
+                 eps = 0)
+  
+  return(as_tibble(gse))
+})
+
+#bind them all and separate the sample label
+kegg.df.dels <- bind_rows(kegg.df.list.dels, .id = "sample") %>%
+  separate(sample, into = c("line", "seqtype"), sep = "\\.")
+
+# make the names lowercase
+names(kegg.df.dels) <- tolower(names(kegg.df.dels))
+
+write_csv(kegg.df.dels, "../../data_frames/table_s9_kegg_results.csv")
+```
+
+### Randomized
+
+Run this again, but after randomizing the fold-changes within each line to show that we can't get any categories by doing that. 
+```{r}
+shuffle.vecs <- fc.df %>% 
+  # only need these cols
+  select(line, target_id, ds_log2foldchange_rna, ds_log2foldchange_ribo) %>%
+  # reshape to be able to split by two things
+  pivot_longer(., col = starts_with("ds_"), names_to = "seqtype", values_to = "l2fc") %>%
+  # remove unnecessary string to leave just seqtype 
+  mutate(seqtype = str_remove(seqtype, "ds_log2foldchange_")) %>%
+  # split based on line/seqtype
+  split(list(.$line, .$seqtype)) %>%
+  map(function(x){
+    # place in desc order
+    df <- x %>%
+      filter(!is.na(l2fc))
+    
+    # shuffle the fc column, mismatching fc's and genes
+    df$l2fc <- sample(df$l2fc, size = length(df$l2fc), replace = FALSE)
+    
+    # rearrange it to be decreasing order
+    df <- arrange(df, desc(l2fc))
+    
+    # vec of fold changes
+    fcs <- pull(df, l2fc)
+    
+    # name that
+    names(fcs) <- df$target_id
+    
+    return(fcs)
+  })
+```
+
+Run the clusterprofiler function on the shuffled dataset. 
+```{r}
+shuffle.kegg <- lapply(shuffle.vecs, function(x){
+  gse <- gseKEGG(x,
+                 organism = "ebr",
+                 minGSSize = 2,
+                 maxGSSize = 1000,
+                 pvalueCutoff = 1,
+                 eps = 0)
+  
+  return(as_tibble(gse))
+})
+
+#bind them all and separate the sample label
+shuffle.kegg.df <- bind_rows(shuffle.kegg, .id = "sample") %>%
+  separate(sample, into = c("line", "seqtype"), sep = "\\.")
+
+# make the names lowercase
+names(shuffle.kegg.df) <- tolower(names(shuffle.kegg.df))
+```
+
+Only two.
+```{r}
+shuffle.kegg.df %>% 
+  filter(qvalues <= .05)
+```
+
+```{r}
+sessionInfo()
+```
+

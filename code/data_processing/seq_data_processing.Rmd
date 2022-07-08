@@ -1,0 +1,178 @@
+---
+title: "Sequencing data processing"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1100px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center", eval = FALSE)
+```
+
+We have 8 raw data files that use the following naming scheme: replicate-sequencing type-Ara plus (ap) or Ara minus (am).
+```{bash eval = TRUE}
+ls ../../seqdata/1-original
+```
+
+### Adapter cutting
+
+We use Cutadapt to remove the adapters.
+```{bash}
+for file in ../../seqdata/1-original/*.gz; do
+  # Derive the file name from the path
+  name=`echo $file | cut -d '/' -f 5`
+  
+  # report file
+  report=../../seqdata/2-adapter_removed/cutadapt_report.txt
+  
+  # echo a header for the file being processed
+  echo ----------$name---------- >> $report
+  
+  # Run cutadapt
+  cutadapt -j 40 -a AGATCGGAAGAGCACACGTCTGAA -m 24 --discard-untrimmed -o ../../seqdata/2-adapter_removed/$name $file &>>$report
+done
+```
+
+### Demultiplexing
+
+We demultiplex with fastx barcode splitter http://hannonlab.cshl.edu/fastx_toolkit/commandline.html This requires a barcode file which is formatted `sample\tbarcode`, i.e. each line is tab-separated sample and barcode. Notice that the barcodes are not unique, there are only 7 but there are 14 samples. AraR is the ancestor in this case.
+```{bash eval = TRUE}
+cat ../../seqdata/3-demultiplexed/araM_barcodes.tsv ../../seqdata/3-demultiplexed/araP_barcodes.tsv
+```
+
+Because the barcodes are not unique and the splitter assigns names based on the barcode file, we need to use different barcode files depending on the input, namely one for AraP and another for AraM. The barcode file to use can be determined using the input file name. Also, the splitter is single threaded so we can run all the files at the same time by forking processes to the background. **This will cause problems if you have less threads than files**.
+```{bash}
+# For each of the input files
+for file in ../../seqdata/2-adapter_removed/*.gz; do
+  # Derive a file name from the path
+  name=`echo $file | cut -d '/' -f 5 | cut -d '.' -f 1`
+  
+  # Pick the right replicate based on the file name
+  rep=`echo $name | cut -d '-' -f 1`
+  
+  # The two ifelse statements are needed for correct output file naming
+  # Pick the correct barcodes file based on the input file name 
+  if [[ $file == *"am"* ]]; then
+    barcodes=../../seqdata/3-demultiplexed/araM_barcodes.tsv
+  else
+    barcodes=../../seqdata/3-demultiplexed/araP_barcodes.tsv
+  fi
+  
+  # Pick the right sequencing type based on the file name
+  if [[ $file == *"ribo"* ]]; then
+    seqtype=ribo
+  else
+    seqtype=rna
+  fi
+  
+  # demultiplex, fork to background
+  zcat $file | fastx_barcode_splitter.pl --bcfile $barcodes --eol --prefix ../../seqdata/3-demultiplexed/$rep\-$seqtype\- --suffix .fq &
+done
+```
+
+Recompress each of those
+```{bash}
+for file in ../../seqdata/3-demultiplexed/*.fq; do
+  pigz -p 32 $file 
+done
+```
+
+### Deduplication
+
+We will remove exact duplicates from the data using dedupe (https://jgi.doe.gov/data-and-tools/bbtools/bb-tools-user-guide/dedupe-guide/). `-Xmx56g` asks for 56Gb of ram for the heap. It used a max of 28960 megabytes but I gave it more to be safe. 
+```{bash}
+# make dirs for duplicates and deduplicated files
+mkdir ../../seqdata/4-deduplicated/deduped_files ../../seqdata/4-deduplicated/duplicates
+
+for file in ../../seqdata/3-demultiplexed/*gz; do
+  # don't do the unmatched files
+  if [[ $file == *"unmatched"* ]]; then
+    continue
+  fi
+  
+  # Derive the correct file name from the path
+  name=`echo $file | cut -d '/' -f 5`
+  
+  # the name and location of the duduped file
+  dedupedfile=../../seqdata/4-deduplicated/deduped_files/$name
+  
+  # the name and location of the duplicates
+  dupfile=../../seqdata/4-deduplicated/duplicates/$name
+  
+  # the report file
+  report=../../seqdata/4-deduplicated/dedupe_report.txt
+  
+  echo ----------$name---------->>$report
+  
+  # deduplicating command
+  /home/prshah/Software/pckgs/bbmap/dedupe.sh in=$file out=$dedupedfile outd=$dupfile ac=f t=40 -Xmx56g &>>$report
+done
+```
+
+### End trimming
+
+Then we need to cut the random bases and barcodes off the ends with cutadapt. We remove the 4 random nucleotides from the 5' end and 10 nucleotides from the 3' end (5 barcode + 5 random) and get rid of all reads shorter than 24.
+```{bash}
+for file in ../../seqdata/4-deduplicated/deduped_files/*; do
+  name=`echo $file | cut -d '/' -f 6`
+  
+  report=../../seqdata/5-trimmed_ends/cutadapt_report.txt
+  
+  echo ----------$name---------->>$report
+  
+  cutadapt -j 32 -u 4 -u -10 -m 24 -o ../../seqdata/5-trimmed_ends/$name $file &>>report
+done
+```
+
+### in silico rRNA depeletion
+
+This is done by mapping to an rRNA index and retaining unmapped reads. make an rRNA index for e coli:
+```{bash}
+hisat2-build -p 1 ../../fastas/ecoli_rrna.fa ../../alignment/hisat2/indices/ecoli_rrna
+```
+
+Remove the rRNA reads
+```{bash}
+for file in ../../seqdata/5-trimmed_ends/*fq.gz; do
+    # get just the filename
+    name=`echo $file | cut -d '/' -f 5 | cut -d '.' -f 1`
+    
+    # the path to the rRNA index
+    ipath=../../alignment/hisat2/indices/ecoli_rrna
+    
+    # the sam output location
+    output=../../alignment/hisat2/output/$name\.sam
+    
+    # the unaligned, i.e. rRNA free reads
+    unaligned=../../seqdata/6-rrna_depleted/$name\.fq.gz
+    
+    # the report file
+    report=../../seqdata/6-rrna_depleted/rrna_removal_report.txt
+    
+    echo ----------$name---------->>$report
+    
+    # run the alignment
+    hisat2 -x $ipath -S $output -U $file -p 40 --un-gz $unaligned &>>$report
+    
+    # remove the sam
+    rm ../../alignment/hisat2/output/$name\.sam
+done
+```
+
+After this step, the files have been completely processed and are ready for actual alignment. 
+
+```{r eval = TRUE}
+sessionInfo()
+```
+

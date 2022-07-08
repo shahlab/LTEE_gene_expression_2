@@ -1,0 +1,168 @@
+---
+title: "Data cleanup"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1100px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+This document details the cleaning of the data. The main goals here are  
+1. Sum the counts of duplicated genes  
+2. Round the counts and recalculate TPM  
+3. Add back deleted genes to the evolved lines with a count and tpm of 0
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+```{r}
+library(tidyverse)
+```
+
+Create the vector for the kallisto tsvs
+```{r}
+tsv.locs <- dir("../../alignment/kallisto/output", recursive = TRUE, full.names = TRUE, pattern = ".tsv")
+
+names(tsv.locs) <- str_extract(tsv.locs, "rep[12]-[a-z]{3,4}-Ara[MPR][1-7]")
+```
+
+Ara+6 had library issues, hence it will be removed here, ultimately removing it from all further analysis. 
+```{r}
+tsv.locs <- tsv.locs[!(grepl("AraP6", names(tsv.locs)))]
+```
+
+Duplicated genes look like ECB_xxxxx_xx as opposed to ECB_xxxxx, we can simply split about the _ and only rejoin the first two results of the split. That will work for all genes except metZ which already had a duplicate, it's metZ_1 and metZ_2.
+```{r}
+tsv.list1 <- lapply(tsv.locs, function(x){
+  t1 <- read_tsv(x) %>%
+    separate(target_id, into = letters[1:3], sep = "_") %>%                      # separate target_id to three cols
+    unite("target_id", c("a", "b"), sep = "_") %>%                               # only put the first two cols back together
+    select(-c)                                                                   # discard last col
+  
+  t1$target_id <- str_replace(t1$target_id, "metZ_[12]", "metZ")                 # replace the _# for metZ
+  
+  t1$target_id <- str_remove(t1$target_id, "_NA")                                # _NA is appended to tRNAs, remove it
+  
+  t2 <- t1 %>% 
+    group_by(target_id) %>%                                                      # for each target_id
+    summarise(est_counts = sum(est_counts),                                      # sum the counts
+              eff_length = mean(eff_length),                                     # avg eff_length
+              length = mean(length)) %>%                                         # avg length
+    ungroup() %>% 
+    mutate(est_counts = round(est_counts),                                       # round counts
+           tpm = ((est_counts/eff_length)/(sum(est_counts/eff_length)))*1000000) # recalc TPM
+  
+  return(t2)
+})
+```
+
+Add back the missing genes to the evolved lines. Get the ancestral complement of genes, eventually used to add rows back to the evolved files. For this reason, the counts and tpm for this df are set to 0. It doesn't matter which ancestral file is used for this.
+```{r}
+anc.genes <- tsv.list1$`rep2-rna-AraR6` %>% 
+  mutate(est_counts = 0,
+         tpm = 0)
+```
+
+Add back the deleted genes, this has no effect on the ancestral tsvs.
+```{r}
+tsv.list2 <- lapply(tsv.list1, function(x){
+  missing.genes <- anti_join(anc.genes, x, by = "target_id")
+  
+  return(bind_rows(x, missing.genes))
+})
+```
+
+Now all of the tsvs are of the same length
+```{r}
+unique(unlist(lapply(tsv.list2, nrow)))
+```
+
+And have the same complement of genes
+```{r}
+# list of vectors of genes names
+gene.list <- lapply(tsv.list2, function(x){
+  x %>% 
+    pull(target_id) %>% 
+    sort()
+})
+
+# this will be TRUE if each vector in gene.list is identical
+all(mapply(identical, head(gene.list, 1), tail(gene.list, -1)))
+```
+
+Finally, combine these to a single data frame to save
+```{r}
+final.df <- bind_rows(tsv.list2, .id = "sample") %>% 
+  separate(sample, into = c("repl", "seqtype", "line"))
+
+# rename the line names
+final.df$line <- str_replace(final.df$line, "P", "+") %>% 
+  str_replace("M", "-") %>% 
+  str_replace("AraR", "REL60")
+
+write_csv(final.df, "../../data_frames/table_s1_read_counts.csv")
+
+final.df
+```
+
+### Mark deletions
+
+We know which genes were not present at this step. These were genes with **any** deletion, i.e. pseudogenized by small deletion that caused a frameshift, or or completely absent. Make a data frame that contains the genes with deletions in each line, to be used later. 
+```{r}
+dels.df <- lapply(tsv.list1, function(x){
+  missing.genes <- anti_join(anc.genes, x, by = "target_id")
+  
+  return(missing.genes)
+}) %>% 
+  bind_rows(.id = "sample") %>% 
+  separate(sample, into = c("repl", "seqtype", "line")) %>% 
+  select(line, target_id) %>% 
+  unique()
+
+dels.df$line <- str_replace(dels.df$line, "P", "+") %>% 
+  str_replace("M", "-") %>% 
+  str_replace("AraR", "REL60")
+
+write_csv(dels.df, "../../data_frames/del_per_line.csv")
+```
+
+### Mark duplicated genes
+
+At this step, we knew which genes occurred in more than one copy. In the same manner as above, create a df that shows n copies per genes. 
+```{r}
+n.copies <- lapply(tsv.locs, function(x){
+  t1 <- read_tsv(x) %>%
+    separate(target_id, into = letters[1:3]) %>%
+    unite("target_id", c("a", "b"), sep = "_") %>%
+    select(-c)
+  
+  t1$target_id <- str_replace(t1$target_id, "metZ_[12]", "metZ")
+  
+  t1$target_id <- str_remove(t1$target_id, "_NA")
+  
+  t1 %>% 
+    group_by(target_id) %>% 
+    tally() %>% 
+    ungroup()
+}) %>% 
+  bind_rows(.id = "sample") %>% 
+  separate(sample, into = c("repl", "seqtype", "line")) %>% 
+  select(line, target_id, n) %>% 
+  unique()
+
+write_csv(n.copies, "../../data_frames/dups_per_line.csv")
+```
+
+```{r}
+sessionInfo()
+```
+

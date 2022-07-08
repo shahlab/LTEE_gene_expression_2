@@ -1,0 +1,78 @@
+---
+title: "Figure S6"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+Load packages
+```{r}
+library(tidyverse)
+library(ggpubr)
+library(scales)
+library(ggpointdensity)
+```
+
+And read in data
+```{r}
+all.data <- read_csv("../../data_frames/all_data.csv") %>% 
+  filter(gene_type == "ECB")
+```
+
+### Panel A
+
+```{r fig.width = 11, fig.height = 4.5}
+pa <- all.data %>% 
+  ggplot(., aes(ds_log2foldchange_rna, ds_log2foldchange_ribo))+
+  geom_abline(aes(slope = 1, intercept = 0), linetype = 5)+
+  geom_pointdensity(size = .5)+
+  theme_bw()+
+  theme(text = element_text(size = 14),
+        panel.grid = element_blank(),
+        legend.position = c(.93, .25),
+        legend.title = element_text(size = 11))+
+  stat_cor(aes(label = ..r.label..), label.y.npc = .99, show.legend = FALSE)+
+  labs(x = expression(paste(log[2], "(RNAseq fold-change)")),
+       y = expression(paste(log[2], "(Riboseq fold-change)")),
+       title = "A")+
+  scale_color_viridis_c(option = "B", name = "Neighboring\npoints")+
+  facet_wrap(~line, ncol = 6, scales = "free")
+
+pa
+```
+
+### Final figure
+
+```{r fig.width = 11, fig.height = 4.5}
+ff <- pa
+
+ff
+```
+
+Save it in various formats
+```{r}
+ggsave(ff, filename = "../../figures/fig_s6.png", width = 11, height = 4.5)
+
+ggsave(ff, filename = "../../figures/fig_s6.pdf", device = cairo_pdf, width = 11, height = 4.5)
+
+write_rds(ff, "../../figures/fig_s6.rds")
+```
+
+```{r}
+sessionInfo()
+```

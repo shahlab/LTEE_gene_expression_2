@@ -1,0 +1,480 @@
+---
+title: "Figure 3"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+Load packages
+```{r}
+library(tidyverse)
+library(scales)
+library(nlme)
+library(ggpointdensity)
+library(ggpubr)
+library(gridExtra)
+library(patchwork)
+```
+
+Read in data
+```{r}
+all.data <- read_csv("../../data_frames/all_data.csv") %>% 
+  filter(gene_type == "ECB")
+
+kdf <- read_csv("../../data_frames/table_s1_read_counts.csv")
+
+my.mutations <- read_csv("../../data_frames/table_s12_mutations.csv")
+
+genome.wide.codon.density <- read_csv("../../data_frames/table_s8_genome_wide_codon_densities.csv")
+
+kdf <- read_csv("../../data_frames/table_s1_read_counts.csv")
+```
+
+This is a set of colors for the amino acids, and also the order in which I want them graphed.
+```{r}
+my.colors <- c("black","#a0504e","#5bb748","#9856c9","#adb839","#5e6ccc","#d59b34","#de6fd2","#5fbc85","#c14092","#3f7c44","#d13c61","#3fbfbc","#cd5632","#5e95cf","#90a452","#c290d5","#7b6c27","#90578d","#cd8e5a","#e48197")
+
+aa.order <- genome.wide.codon.density$amino_acid %>% 
+  unique() %>% 
+  sort()
+```
+
+```{r}
+mut.levels <- all.data %>%
+  select(line, mutator) %>%
+  arrange(mutator, line) %>%
+  unique() %>%
+  pull(line)
+
+mut.colors <- c(rep("black", 6), rep("firebrick3", 5))
+```
+
+### Panel A
+
+RNAseq and riboseq fold changes are correlated
+```{r fig.width = 11, fig.height = 8}
+all.data %>% 
+  mutate(
+    sig_type = case_when(
+      ds_padj_rna <= .01 & ds_padj_ribo <= .01 ~ "Both",
+      !is.na(ds_padj_rna) & ds_padj_rna <= .01 ~ "RNA",
+      !is.na(ds_padj_ribo) & ds_padj_ribo <= .01 ~ "Ribo"
+    ),
+    sig_type = ifelse(is.na(sig_type), "Neither", sig_type),
+    sig_type = factor(sig_type, c("Both", "RNA", "Ribo", "Neither"))) %>% 
+  arrange(desc(sig_type)) %>% 
+  ggplot(., aes(ds_log2foldchange_rna, ds_log2foldchange_ribo, color = sig_type))+
+  geom_abline(aes(slope = 1, intercept = 0), linetype = 5)+
+  geom_point(size = 1)+
+  facet_wrap(~line, ncol = 4, scales = "free")+
+  theme_bw()+
+  theme(text = element_text(size = 14),
+        panel.grid = element_blank(),
+        legend.position = c(.9, .15))+
+  stat_cor(aes(label = ..r.label..), label.y.npc = .99, show.legend = FALSE)+
+  stat_cor(inherit.aes = FALSE, aes(ds_log2foldchange_rna, ds_log2foldchange_ribo, label = ..r.label..), label.y.npc = .67)+
+  scale_color_manual(values = c("steelblue", "indianred", "orange3", "grey70"))+
+  labs(x = expression(paste(log[2], "(RNAseq fold-change)")),
+       y = expression(paste(log[2], "(Riboseq fold-change)")))
+```
+
+```{r}
+all.data %>% 
+  mutate(
+    sig_type = case_when(
+      ds_padj_rna <= .01 & ds_padj_ribo <= .01 ~ "Both",
+      !is.na(ds_padj_rna) & ds_padj_rna <= .01 ~ "RNA",
+      !is.na(ds_padj_ribo) & ds_padj_ribo <= .01 ~ "Ribo"
+    ),
+    sig_type = ifelse(is.na(sig_type), "Neither", sig_type),
+    sig_type = factor(sig_type, c("Both", "RNA", "Ribo", "Neither"))) %>%
+  filter(sig_type != "Neither") %>% 
+  ggplot(., aes(line, fill = sig_type))+
+  geom_bar(position = "fill")+
+  scale_fill_manual(values = c("steelblue", "indianred", "orange3"))+
+  theme_bw()+
+  theme(text = element_text(size = 14),
+        panel.grid = element_blank())+
+  labs(x = NULL, y = NULL)
+```
+Except for only one of the lines
+```{r}
+pa <- all.data %>% 
+  filter(line == "Ara+1") %>% 
+  ggplot(., aes(ds_log2foldchange_rna, ds_log2foldchange_ribo))+
+  geom_abline(aes(slope = 1, intercept = 0), linetype = 5)+
+  geom_pointdensity(size = 1)+
+  theme_bw()+
+  theme(text = element_text(size = 14),
+        panel.grid = element_blank())+
+  stat_cor(aes(label = ..r.label..), label.y.npc = .99, show.legend = FALSE)+
+  labs(x = expression(paste(log[2], "(RNAseq fold-change)")),
+       y = expression(paste(log[2], "(Riboseq fold-change)")),
+       title = "A")+
+  scale_color_viridis_c(option = "B", guide = "none")+
+  facet_wrap(~line)
+
+pa
+```
+
+### Panel B
+
+Riborex results
+```{r}
+# find the number of significant riborex genes in each line
+bdf <- all.data %>%
+  group_by(line, mutator) %>%
+  tally(rr_sig == TRUE) %>% 
+  ungroup() %>% 
+  arrange(mutator, n)
+
+mut.lines <- bdf %>% 
+  filter(mutator == TRUE) %>% 
+  pull(line) %>% 
+  as.character()
+
+# line order 
+bdf$line <- factor(bdf$line, bdf$line)
+
+# x axis colors
+b.colors <- sapply(bdf$line, function(x){
+  if (x %in% mut.lines){
+    return("firebrick")
+  } else {
+    return("black")
+  }
+})
+
+# the plot
+pb <- bdf %>%
+  ggplot(., aes(line, n))+
+  geom_col()+
+  theme_bw()+
+  theme(panel.grid = element_blank(),
+        text = element_text(size = 14),
+        axis.text.x = element_text(angle = 45, vjust = 1.1, hjust = 1.1, color = b.colors))+
+  scale_y_continuous(breaks = 0:6)+
+  labs(x = NULL,
+       y = "Transcripts with altered\nribosomal densities",
+       title = "B")
+
+pb
+```
+
+### Panel C
+
+Codon heatmap. Load and shape the codon data.
+```{r}
+# get the evovled lines density
+evos <- genome.wide.codon.density %>%
+  group_by(codon, line, amino_acid) %>%
+  summarise(mean_dens_sans_zero = mean(avg_ribo_n),
+            var_dens_sans_zero = var(avg_ribo_n),
+            std_dens_sans_zero = sd(avg_ribo_n),
+            mean_dens_with_zero = mean(avg_ribo_n_w_0),
+            var_dens_with_zero = var(avg_ribo_n_w_0),
+            std_dens_with_zero = sd(avg_ribo_n_w_0)) %>%
+  ungroup() %>%
+  filter(!(grepl("REL", line)))
+
+# get the ancestral densities
+ancs <- genome.wide.codon.density %>%
+  filter(grepl("REL", line)) %>%
+  select(-line, -replicate) %>%
+  group_by(codon, amino_acid) %>%
+  summarise(mean_dens_sans_zero = mean(avg_ribo_n),
+            var_dens_sans_zero = var(avg_ribo_n),
+            std_dens_sans_zero = sd(avg_ribo_n),
+            mean_dens_with_zero = mean(avg_ribo_n_w_0),
+            var_dens_with_zero = var(avg_ribo_n_w_0),
+            std_dens_with_zero = sd(avg_ribo_n_w_0)) %>%
+  ungroup()
+
+# join them
+joined.dens.df <- left_join(evos, ancs, by = c("codon", "amino_acid"), suffix = c("_evo", "_anc"))
+
+head(joined.dens.df)
+```
+
+Create the data frame necessary for the plot
+```{r}
+# calculate ratios and create new x labs
+rdf <- joined.dens.df %>%
+  mutate(ratio = mean_dens_with_zero_evo / mean_dens_with_zero_anc,
+         newlab = paste("(", amino_acid, ")", " ", codon, sep = ""))
+
+# save this for Alex's use
+write_csv(rdf, "../../../old_3ltee/codon_densities.csv")
+
+# find mean ratios for AA for ordering purposes
+mean.rat <- rdf %>%
+  group_by(amino_acid) %>%
+  summarise(mean_ratio = mean(ratio)) %>%
+  ungroup()
+
+# this is the x axis order
+codon.levels <- left_join(rdf, mean.rat, by = "amino_acid") %>%
+  arrange(mean_ratio) %>%
+  pull(newlab) %>%
+  unique()
+
+# apply the factor levels
+rdf$newlab <- factor(rdf$newlab, levels = codon.levels)
+
+rdf$line <- factor(rdf$line, levels = mut.levels)
+```
+
+Generate the colors needed for the codons on the x axis
+```{r}
+# color vector
+my.colors <- c("black","#a0504e","#5bb748","#9856c9","#adb839","#5e6ccc","#d59b34","#de6fd2","#5fbc85","#c14092","#3f7c44","#d13c61","#3fbfbc","#cd5632","#5e95cf","#90a452","#c290d5","#7b6c27","#90578d","#cd8e5a","#e48197")
+
+# get a vector that shows how many codons code for an AA
+codon.to.repeat <- left_join(rdf, mean.rat, by = "amino_acid") %>%
+  arrange(mean_ratio) %>%
+  select(amino_acid, newlab) %>%
+  unique() %>%
+  group_by(amino_acid) %>%
+  tally() %>%
+  left_join(., mean.rat, by = "amino_acid") %>%
+  arrange(mean_ratio) %>%
+  pull(n)
+
+all.my.colors <- sapply(1:21, function(x){
+  rep(my.colors[x], each = codon.to.repeat[x])
+}) %>%
+  unlist()
+```
+
+The plot
+```{r fig.width = 16, fig.height = 4}
+pc <- rdf %>%
+  ggplot(., aes(newlab, line, fill = log2(ratio)))+
+  geom_raster()+
+  scale_fill_gradient2(midpoint = 0, 
+                       breaks = c(-1.4, -.7, 0, .7, 1.4), 
+                       labels = c(-1.4, "", 0, "", 1.4),
+                       name = expression(paste(log[2], "(fold-change in ribosome density)", sep = "")), 
+                       high = "steelblue", low = "indianred", 
+                       limits = c(-1.4, 1.4),
+                       guide = guide_colorbar(ticks.colour = "black"))+
+  theme(axis.text.x = element_text(angle = 90, color = all.my.colors, hjust = 1, vjust = .5, size = 9),
+        text = element_text(size = 14),
+        axis.text.y = element_text(color = mut.colors),
+        panel.background = element_blank(),
+        legend.position = "bottom")+
+  labs(x = NULL, y = NULL, title = "C")
+
+pc
+```
+
+### Panel D
+
+Termination factor mutations and fold changes. This heatmap will have color as fold changes and some symbols to denote significance and presence/absence of a mutation. Mark genes with mutations. 
+```{r}
+# these are termination factors
+prots <- c("ECB_01186", "ECB_04250", "ECB_00170", "ECB_02723", "ECB_03191", "ECB_01187", "ECB_00231", "ECB_00230", "ECB_04017")
+
+term.names <- all.data %>% 
+  filter(target_id %in% prots) %>% 
+  pull(rel_name) %>% 
+  unique()
+
+missing.df <- data.frame(
+  population = rep(unique(all.data$line), length(term.names)),
+  gene_name = rep(term.names, each = length(unique(all.data$line))),
+  value2 = 0
+)
+
+muts.df <- sapply(term.names, function(x){
+  my.mutations %>% 
+    filter(grepl(x, gene_list))
+}, simplify = FALSE) %>% 
+  bind_rows() %>% 
+  select(population, gene_name) %>% 
+  mutate(value = 1) %>% 
+  full_join(missing.df) %>% 
+  mutate(value3 = value + value2) %>% 
+  replace_na(list("value3" = 0)) %>% 
+  rename("line" = "population",
+         "rel_name" = "gene_name")
+```
+
+Then get the RNAseq fold changes
+```{r}
+term.fcs <- all.data %>% 
+  select(line, rel_name, ds_log2foldchange_rna, ds_padj_rna) %>% 
+  filter(rel_name %in% term.names)
+```
+
+Join them and make a label column that shows mutation status and significance.
+```{r}
+ddf <- left_join(term.fcs, muts.df) %>%
+  mutate(stars = as.character(cut(
+    ds_padj_rna,
+    c(1, .05, .01, .001, .0001, -Inf),
+    labels = c("****", "***", "**", "*", "")
+  )),
+  mut.sign = ifelse(value3 == 1, "M", ""),
+  stars = ifelse(is.na(stars), "", stars),
+  label = paste(stars, mut.sign),
+  line = factor(line, levels = mut.levels)) %>% 
+  select(line, rel_name, ds_log2foldchange_rna, label)
+
+head(ddf)
+```
+
+Plot it
+```{r}
+scale.labels <- c(paste("\u2264", paste0("-", 3), sep = ""),
+                  "",
+                  0,
+                  "",
+                  paste("\u2265", 3, sep = ""))
+
+pd <- ddf %>%
+  mutate(newfc = ifelse(ds_log2foldchange_rna < -3, -3,
+                        ifelse(ds_log2foldchange_rna > 3, 3, ds_log2foldchange_rna)),
+         facet = "Translation termination factors") %>% 
+  ggplot(., aes(rel_name, line, fill = newfc, label = label))+
+  geom_raster()+
+  geom_text(size = 3)+
+  scale_fill_gradientn(colors = c("indianred", "white", "steelblue"),
+                       name = expression(paste(log[2], "(FC)")), limits = c(-3, 3),
+                       labels = scale.labels,
+                       breaks = c(-3, -1.5, 0, 1.5, 3),
+                       guide = guide_colorbar(ticks.colour = "black"))+
+  theme(panel.background = element_blank(),
+        panel.grid = element_blank(),
+        text = element_text(size = 14),
+        axis.text.y = element_text(color = mut.colors),
+        axis.text.x = element_text(angle = 45, vjust = 1.1, hjust = 1.1))+
+  labs(x = NULL,
+       y = NULL,
+       title= "D")+
+  facet_wrap(~facet)
+
+pd
+```
+
+### Final figure
+
+```{r fig.width = 11.5, fig.height = 8}
+top <- pa | pb | pd 
+
+ff <- top / pc
+
+ff
+```
+
+Save it in various formats
+```{r}
+ggsave(ff, filename = "../../figures/fig_3.png", width = 11.5, height = 8)
+
+ggsave(ff, filename = "../../figures/fig_3.pdf", device = cairo_pdf, width = 11.5, height = 8)
+
+write_rds(ff, "../../figures/fig_3.rds")
+```
+
+### Modeling 
+
+This has a figure but only makes it into the paper as textual description 
+
+We use a linear mixed model to look for differences between stop codons and the rest of the amino acids while accounting for the individual line differences. The following is modified code from Alex Cope. 
+```{r}
+model.input <- rdf %>% 
+  select(line, codon, amino_acid, ratio) %>% 
+  mutate(class = ifelse(amino_acid == "*", "stop", "aa"),
+         ratio = log2(ratio))
+```
+
+Fit a null model
+```{r}
+model.0 <- lm(ratio~class,data=model.input)
+```
+
+Try various models
+```{r}
+## Random intercept, same slope
+model.1 <- lme(fixed=ratio~class, random=~1|line,data = model.input,method = "ML",control=list(opt="optim",niterEM=100,maxIter=500,msMaxIter=500))
+
+
+## Following example here https://rpsychologist.com/r-guide-longitudinal-lme-lmer for uncorrelated random intercept and random slope 
+model.2 <- lme(fixed=ratio~class, random=list(line = pdDiag(~class)),data = model.input,method = "ML",control=list(opt="optim",niterEM=100,maxIter=500,msMaxIter=500))
+
+
+## Random slope, same intercept
+model.3 <- lme(fixed=ratio~class, random=~0+class|line,data = model.input,method = "ML",control=list(opt="optim",niterEM=100,maxIter=500,msMaxIter=500))
+
+
+## Random slope of x within group with correlated intercept (i.e. slope and intercept covary)
+model.4 <- lme(fixed=ratio~class, random=~class|line,data = model.input,method = "ML",control=list(opt="optim",niterEM=100,maxIter=500,msMaxIter=500))
+```
+
+Compare the model fits
+```{r}
+(model.table <- anova(model.4,model.3,model.2,model.1,model.0))
+```
+
+Pick the simplest one
+```{r}
+model.list <- list(model.4,model.3,model.2,model.1,model.0)
+best.model <- model.list[[which.min(model.table$AIC)]]
+```
+
+QC plots don't look too great
+```{r}
+plot(best.model)
+qqnorm(best.model, ~ranef(.,standard=T))
+qqnorm(best.model,~resid(.,type="p"))
+qqnorm(best.model,~resid(.,type="p") | line )
+plot(best.model,sqrt(abs(resid(., type = "p"))) ~ fitted(.), type = c("p", "smooth"))
+```
+
+A plot showing the effects
+```{r}
+random.ef.df <- random.effects(best.model) %>% 
+  as_tibble(rownames = "line")
+
+coef.df <- coef(best.model) %>% 
+  as_tibble(rownames = "line")
+
+plot.df <- bind_rows("Random effect estimates" = random.ef.df, "Slope estimates" = coef.df, .id = "type") %>% 
+  mutate(line = factor(line, levels = mut.levels))
+``` 
+
+```{r}
+plot.df %>% 
+  ggplot(., aes(line, classstop))+
+  geom_col()+
+  geom_hline(aes(yintercept = 0))+
+  facet_wrap(~type, ncol = 1)+
+  theme_bw()+
+  theme(text = element_text(size = 14),
+        panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 45, vjust = 1.1, hjust = 1.1, color = mut.colors))+
+  labs(x = NULL,
+       y = NULL,
+       title = "B")
+
+pb
+```
+
+```{r}
+sessionInfo()
+```

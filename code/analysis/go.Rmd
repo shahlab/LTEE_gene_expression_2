@@ -1,0 +1,269 @@
+---
+title: "GO analysis"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(org.EcK12.eg.db)
+library(topGO)
+```
+
+As in the KEGG analysis, deleted genes get a fold change of -10 and in this case, a p value of 0.01 because that's how genes are picked for this analysis. 
+```{r}
+all.data <- read_csv("../../data_frames/all_data.csv") %>%
+  filter(gene_type == "ECB") %>% 
+  mutate(ds_log2foldchange_rna = ifelse(deleted == TRUE, -10, ds_log2foldchange_rna),
+         ds_log2foldchange_ribo = ifelse(deleted == TRUE, -10, ds_log2foldchange_ribo),
+         ds_padj_rna = ifelse(deleted == TRUE, .01, ds_padj_rna),
+         ds_padj_ribo = ifelse(deleted == TRUE, .01, ds_padj_ribo))
+```
+
+## topGO 
+
+Get the vectors needed for topGO. The vector itself is whats used to determine interesting genes, 1 if gene is of interest and 0 if it is not. The names of the vector are supposed to be the gene names. 
+```{r}
+all.down <- all.data %>%
+  mutate(sig = ifelse(ds_padj_rna <= .01 &
+                        ds_log2foldchange_rna < 0, 1, 0)) %>% # is this a sig down gene
+  dplyr::select(line, k12_name, sig, ds_padj_rna) %>% # only need these cols
+  filter(!is.na(ds_padj_rna) &
+           !is.na(k12_name)) %>% # can't do anything with nameless genes
+  split(.$line) %>%
+  map(function(x) {
+    # sort by increasing p value
+    df <- x %>%
+      arrange(ds_padj_rna)
+    
+    # vector of sig or not
+    ps <- df$sig
+    
+    # gene names as vector names
+    names(ps) <- df$k12_name
+    
+    # return a named vector
+    return(ps)
+  })
+
+# same but for upregulated genes
+all.up <- all.data %>%
+  mutate(sig = ifelse(ds_padj_rna <= .01 &
+                        ds_log2foldchange_rna > 0, 1, 0)) %>%
+  dplyr::select(line, k12_name, sig, ds_padj_rna) %>%
+  filter(!is.na(ds_padj_rna) & !is.na(k12_name)) %>%
+  split(.$line) %>%
+  map(function(x) {
+    df <- x %>%
+      arrange(ds_padj_rna)
+    
+    ps <- df$sig
+    
+    names(ps) <- df$k12_name
+    
+    return(ps)
+  })
+```
+
+Function to pick significant genes
+```{r}
+selection <- function(x){x == 1}
+```
+
+```{r}
+ontologies <- c("BP", "MF", "CC")
+
+names(ontologies) <- ontologies
+
+up.df <- lapply(ontologies, function(x) {
+  lapply(all.up, function(y) {
+    # generate the go object
+    godata <- new(
+      "topGOdata",
+      ontology = x,
+      allGenes = y,
+      geneSel = selection,
+      annot = annFUN.GO2genes,
+      GO2genes = annFUN.org(
+        whichOnto = x,
+        feasibleGenes = NULL,
+        mapping = "org.EcK12.eg.db",
+        ID = "symbol"
+      ),
+      nodeSize = 5
+    )
+    
+    # run fishers test
+    results.fisher <-
+      runTest(godata, algorithm = "classic", statistic = "fisher")
+    
+    # run ks test
+    results.ks <-
+      runTest(godata, algorithm = "classic", statistic = "ks")
+    
+    # generate a data frame from the results
+    go.table <-
+      GenTable(godata,
+               fisher = results.fisher,
+               KS = results.ks,
+               topNodes = 65)
+  }) %>%
+    bind_rows(.id = "line")
+}) %>%
+  bind_rows(.id = "ontology")
+```
+
+Same, but for downregulated genes
+```{r}
+down.df <- lapply(ontologies, function(x) {
+  lapply(all.down, function(y) {
+    # generate the go object
+    godata <- new(
+      "topGOdata",
+      ontology = x,
+      allGenes = y,
+      geneSel = selection,
+      annot = annFUN.GO2genes,
+      GO2genes = annFUN.org(
+        whichOnto = x,
+        feasibleGenes = NULL,
+        mapping = "org.EcK12.eg.db",
+        ID = "symbol"
+      ),
+      nodeSize = 5
+    )
+    
+    # run fishers test
+    results.fisher <-
+      runTest(godata, algorithm = "classic", statistic = "fisher")
+    
+    # run ks test
+    results.ks <-
+      runTest(godata, algorithm = "classic", statistic = "ks")
+    
+    # generate a data frame from the results
+    go.table <-
+      GenTable(godata,
+               fisher = results.fisher,
+               KS = results.ks,
+               topNodes = 65)
+  }) %>%
+    bind_rows(.id = "line")
+}) %>%
+  bind_rows(.id = "ontology")
+```
+
+```{r}
+go.df <- bind_rows("up" = up.df, "down" = down.df, .id = "direction")
+
+names(go.df) <- tolower(names(go.df)) %>%
+  str_replace_all(" ", "_")
+```
+
+For some reason, there are duplicate category names that have separate go IDs
+```{r}
+dup.cats <- go.df %>% 
+  dplyr::select(ontology, go.id, term) %>% 
+  unique() %>% 
+  group_by(ontology, term) %>% 
+  tally() %>% 
+  ungroup() %>% 
+  filter(n > 1) %>% 
+  arrange(desc(n)) %>% 
+  pull(term)
+```
+
+I want to know if among categories that are duplicated, is one of the duplicates significant while the other is not? This happens in almost all of them. I'm going to ignore all of those cases and take only those that are NA in the FALSE column, indicating they dont' have a sig/not sig issue.
+```{r}
+go.df %>%
+  filter(term %in% dup.cats) %>%
+  dplyr::select(ontology, go.id, term, annotated, fisher) %>%
+  split(.$term) %>%
+  map(function(x) {
+    x %>%
+      mutate(sig = fisher <= .05) %>%
+      pull(sig) %>%
+      table() %>%
+      as_tibble()
+  }) %>%
+  bind_rows(.id = "term") %>%
+  pivot_wider(names_from = ".", values_from = n)
+
+# this is as above, but just extracts the values of interest
+ok.dubs <- go.df %>%
+  filter(term %in% dup.cats) %>%
+  dplyr::select(ontology, go.id, term, annotated, fisher) %>%
+  split(.$term) %>%
+  map(function(x) {
+    x %>%
+      mutate(sig = fisher <= .05) %>%
+      pull(sig) %>%
+      table() %>%
+      as_tibble()
+  }) %>%
+  bind_rows(.id = "term") %>%
+  pivot_wider(names_from = ".", values_from = n) %>%
+  filter(is.na(`FALSE`)) %>%
+  pull(term)
+```
+
+Find those GO ids, I'm just going to pick the first one in character order
+```{r}
+remove.these.ids <- go.df %>% 
+  filter(term %in% ok.dubs) %>% 
+  dplyr::select(go.id, term) %>% 
+  arrange(term, go.id) %>% 
+  unique() %>% 
+  group_by(term) %>% 
+  filter(row_number() != 1) %>% 
+  ungroup() %>% 
+  pull(go.id)
+```
+
+Finally, exclude the ones that are duplicated and have varying significance
+```{r}
+# this is as above, but just extracts the values of interest
+bad.dubs <- go.df %>%
+  filter(term %in% dup.cats) %>%
+  dplyr::select(ontology, go.id, term, annotated, fisher) %>%
+  split(.$term) %>%
+  map(function(x) {
+    x %>%
+      mutate(sig = fisher <= .05) %>%
+      pull(sig) %>%
+      table() %>%
+      as_tibble()
+  }) %>%
+  bind_rows(.id = "term") %>%
+  pivot_wider(names_from = ".", values_from = n) %>%
+  filter(!is.na(`FALSE`)) %>%
+  pull(term)
+```
+
+```{r}
+go.df2 <- go.df %>% 
+  filter(!(term %in% bad.dubs) & !(go.id %in% remove.these.ids)) %>% 
+  mutate(sig = fisher <= .05) %>% 
+  group_by(direction, ontology, go.id, term) %>% 
+  mutate(total_sig = sum(sig)) %>% 
+  ungroup() %>% 
+  arrange(direction, ontology, desc(total_sig))
+```
+
+Save that
+```{r}
+write_csv(go.df2, "../../data_frames/table_s10_go_results.csv")
+```
+
+```{r}
+sessionInfo()
+```
+

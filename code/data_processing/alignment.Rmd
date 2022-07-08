@@ -1,0 +1,95 @@
+---
+title: "Alignment"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1100px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center", eval = FALSE)
+```
+
+This details both the kallisto and hisat2 alignments. Each of the clones are aligned to their unique genomes, AraR is the ancestor in this case. 
+
+### Kallisto
+
+To start with, make one index for each of the lines. The k19 specifies the kmer size and the .kidx is arbitrary, standing for kallisto index. This is forked to the background to parallelize. 
+```{bash}
+for file in ../../fastas/*; do
+  # derive an index name from the file name
+  name=`echo $file | cut -d '/' -f 4 | cut -d '.' -f 1`_k19.kidx
+  
+  # create the index
+  kallisto index -i ../../alignment/kallisto/indices/$name $file -k 19 &
+done
+```
+
+When running the alignment, files need to be matched to their appropriate genome.
+```{bash}
+for file in ../../seqdata/6-rrna_depleted/*.fq.gz; do
+  # get the line from the file name
+  line=`echo $file | egrep -o "Ara[MPR][1-7]"`
+  
+  # the full file name
+  fname=`echo $file | egrep -o "rep[12]-[a-z]{3,4}-Ara[MPR][1-7]"`
+  
+  # the index to align to
+  index=../../alignment/kallisto/indices/$line\_k19.kidx
+  
+  # the output location
+  output=../../alignment/kallisto/output/$fname
+  
+  # run the alignment
+  kallisto quant -i $index -o $output --single -l 25 -s 6 -t 4 $file
+done
+```
+
+### hisat2
+
+Make the indices for hisat2 to use.
+```{bash}
+for file in ../../fastas/*.fasta; do
+  # get the line from the file name
+  line=`echo $file | egrep -o "Ara[MPR][1-7]"`
+  
+  # Make the indices
+  hisat2-build $file ../../alignment/hisat2/indices/$line -p 4
+done
+```
+
+Run the hisat2 alignment.
+```{bash}
+for file in ../../seqdata/6-rrna_depleted/*.fq.gz; do
+  # get the line from the file name
+  line=`echo $file | egrep -o "Ara[MPR][1-7]"`
+  
+  # the full file name
+  fname=`echo $file | egrep -o "rep[12]-[a-z]{3,4}-Ara[MPR][1-7]"`
+  
+  # the index to align to
+  index=../../alignment/hisat2/indices/$line
+  
+  # the output location
+  output=../../alignment/hisat2/output/$fname\.bam
+  
+  # run the alignment and pipe straight to bam conversion 
+  hisat2 -x $index -U $file -p 16 | samtools sort -O BAM -@ 4 > $output
+done
+```
+
+```{r eval = TRUE}
+sessionInfo()
+```
+
+

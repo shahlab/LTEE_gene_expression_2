@@ -1,0 +1,80 @@
+---
+title: "3nt periodicty"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+```{r message = FALSE, warning = FALSE}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+
+library(tidyverse)
+library(multitaper)
+library(GenomicAlignments)
+library(parallel)
+```
+
+This is to be done using the multitaper package https://github.com/krahim/multitaper/. 
+
+### Normalize the data
+
+```{r}
+bam.locs <- dir("../../alignment/hisat2/output", pattern = ".bam", recursive = TRUE, full.names = TRUE)
+
+names(bam.locs) <- bam.locs %>%
+  str_split(pattern = "/") %>%
+  map(function(x){x[[6]]}) %>%
+  str_remove(".bam") %>%
+  str_replace("AraR", "REL60")
+```
+
+Read the bams in, only keeping + strand reads and excluding ERCCs and tRNAs. Note the use of many cores here. You might have to change that depending on your machine.
+```{r}
+bam.list <- mclapply(bam.locs, function(x){
+  b1 <- readGAlignments(x)
+  
+  b2 <- b1[strand(b1) == "+" & grepl("ECB_", seqnames(b1))]
+  
+  return(b2)
+}, mc.cores = 40)
+```
+
+Calculate periodicity, this seems to want to return a graph no matter what. 
+```{r}
+df.list <- lapply(bam.list, function(x){
+  # count number of reads at each end point
+  t1 <- table(factor(end(x), levels = 15:150))
+  
+  # apply spec function
+  t2 <- spec.pgram(as.ts(t1))
+  
+  # get a df of graphable parts, rescale the spec height to 0-1 so it's comparable across samples
+  t3 <- tibble(period = 1/t2$freq,
+               spec = t2$spec)
+
+  # return said df
+  return(t3)
+})
+```
+
+Bind all those together
+```{r}
+df1 <- bind_rows(df.list, .id = "sample") %>%
+  separate(sample, into = c("rep", "seqtype", "line"), sep = "-") %>% 
+  filter(is.finite(period) & period <= 4) # only retain a small range
+
+df1$line <- gsub("M", "-", df1$line) %>%
+  gsub("P", "+", .) %>% 
+  gsub("AraR", "REL0", .)
+
+# save it
+write_csv(df1, "../../data_frames/three_nt_periodicity.csv")
+```
+
+```{r}
+sessionInfo()
+```
+

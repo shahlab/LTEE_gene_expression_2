@@ -1,0 +1,189 @@
+---
+title: "Combine data frames"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1200px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+This document combines results from various programs, as well as form other data sources to a single data frame that will make some downstream processes easier. First, we will prepare each data frame, then combine them at the end.
+
+```{r}
+library(tidyverse)
+```
+
+### Biocyc information
+
+REL606/7 are annotated at the BioCyc collection of databases. Various files have been downloaded from there and will be added to the data frame. Read in these various files and set column names. These are files that relate K12 and REL names and have other gene descriptions and such. 
+```{r}
+# read in the various files, chaning some column names in the process
+rel_to_k12 <- read_tsv("../../biocyc_files/rel_to_k12_common.txt") 
+
+rel_info <- read_tsv("../../biocyc_files/rel_info.txt")
+
+rel_info_web <- read_tsv("../../biocyc_files/rel_info_web.txt")
+
+k12_info <- read_tsv("../../biocyc_files/k12_info.txt") %>%
+  filter(!is.na(`Accession-1`) & !is.na(`Accession-2`))
+
+k12_info_web <- read_tsv("../../biocyc_files/k12_info_web.txt") %>%
+  filter(!is.na(`Accession-1`) & !is.na(`Accession-2`))
+
+# change the column names
+names(rel_to_k12) <- c("rel_name", "target_id", "k12_name", "k12_accession_1", "k12_accession_2")
+
+names(rel_info) <- c("rel_name", "target_id", "rel_product", "rel_pathways", "rel_reactions")
+
+names(rel_info_web) <- c("rel_url", "target_id")
+
+names(k12_info) <- c("k12_name", "k12_accession_1", "k12_product", "k12_accession_2", "k12_pathways", "k12_reactions")
+
+names(k12_info_web) <- c("k12_url", "k12_accession_1", "k12_accession_2")
+```
+
+Various instances of joining to get those into one data frame. This contains the K12 and REL names, other identifiers, and links (which worked at the time this code was written) to the web pages where they come from.
+```{r}
+full_rel_info <- right_join(rel_info, rel_info_web, by = c("target_id"))
+
+full_k12_info <- right_join(k12_info, k12_info_web, by = c("k12_accession_1", "k12_accession_2"))
+
+b.df <- left_join(rel_to_k12, full_rel_info, by = c("target_id", "rel_name")) %>%
+  left_join(., full_k12_info, by = c("k12_name", "k12_accession_1", "k12_accession_2")) %>%
+  select(target_id, contains("name"), contains("accession"), contains("product"), contains("pathway"), contains("reaction"), everything())
+
+# save it
+write_csv(b.df, "../../data_frames/biocyc_df.csv")
+
+head(b.df)
+```
+
+### Kallisto results
+
+The aim is to show for each row (which is a single gene in a single line) the counts and TPMs for replicates, the mean of those, the counts and TPMs in the 4 ancestral replicates, the average of those, for each seqtype. Surprisingly, this is easier done that said.
+```{r}
+evo.kdf <- read_csv("../../data_frames/table_s1_read_counts.csv") %>%              # read the df in
+  filter(grepl("Ara", line)) %>%                                                   # only want evo for this part
+  select(-length, -eff_length) %>%                                                 # remove these columns
+  pivot_wider(names_from = c(repl, seqtype), values_from = c(est_counts, tpm)) %>% # reshape to a wide format
+  mutate(mean_counts_ribo = (est_counts_rep1_ribo + est_counts_rep2_ribo) / 2,     # calculate the various means
+         mean_counts_rna = (est_counts_rep1_rna + est_counts_rep2_rna) / 2,
+         mean_tpm_ribo = (tpm_rep1_ribo + tpm_rep2_ribo) / 2,
+         mean_tpm_rna = (tpm_rep1_rna + tpm_rep2_rna) / 2)
+
+head(evo.kdf)
+```
+
+Now for the ancestors. One data frame that contains the individuals
+```{r}
+anc.reps <- read_csv("../../data_frames/table_s1_read_counts.csv") %>%
+  filter(!(grepl("Ara", line))) %>%
+  select(-length, -eff_length) %>% 
+  pivot_wider(names_from = c(repl, line, seqtype), values_from = c(est_counts, tpm))
+
+head(anc.reps)
+```
+
+Then one with the means
+```{r}
+anc.means <- read_csv("../../data_frames/table_s1_read_counts.csv") %>%
+  filter(!(grepl("Ara", line))) %>%
+  select(-length, -eff_length) %>% 
+  group_by(seqtype, target_id) %>% 
+  summarise(anc_mean_tpm = mean(tpm),
+            anc_mean_counts = mean(est_counts)) %>% 
+  pivot_wider(names_from = seqtype, values_from = c(anc_mean_tpm, anc_mean_counts))
+
+head(anc.means)
+```
+
+Join those three together
+```{r}
+kdf2 <- list(evo.kdf, anc.reps, anc.means) %>% 
+  reduce(left_join, by = "target_id") %>% 
+  select(line, target_id, contains("counts"), contains("tpm")) # reordering to group TPM and counts
+
+head(kdf2)
+```
+
+### DESeq2 results
+
+Again, we want a data frame in wide as opposed to long format, this is easily accomplished with `pivot_wider`. Add "ds_" as a prefix to names beacuse the riborex results have the same column names
+```{r}
+deseqdf <- read_csv("../../data_frames/table_s2_fold_changes.csv") %>% 
+  pivot_wider(names_from = seqtype, values_from = c(where(is.numeric), sig)) %>% 
+  rename_if(is.numeric, ~paste0("ds_", .)) %>% 
+  rename("ds_sig_ribo" = "sig_ribo", "ds_sig_rna" = "sig_rna")
+
+head(deseqdf)
+```
+
+### Riborex results
+
+Do the same thing as with the DESeq results, placing "rr_" in front instead of "ds_"
+```{r}
+rrdf <- read_csv("../../data_frames/table_s7_riborex_results.csv") %>% 
+  rename_if(is.numeric, ~paste0("rr_", .)) %>% 
+  rename("rr_sig" = "sig") %>% 
+  select(-deleted) # deletions will come the the DESeq df, don't need them here too
+
+head(rrdf)
+```
+
+
+### The large join
+
+We have 4 data frames to be joined, the end result should have `r nrow(kdf2)` rows. 
+```{r}
+big.df <- list(kdf2, deseqdf, rrdf) %>% 
+  reduce(left_join, by = c("line", "target_id")) %>%  # the first 3 are joined by line and target_id
+  left_join(b.df, by = "target_id")                   # the last only by target_id
+
+head(big.df)
+```
+
+### Addition of more columns
+
+Add a few more columns of information, namely is this a mutator line and is the gene an e coli protein coding gene, an ERCC control, or a tRNA?
+```{r}
+big.df2 <- big.df %>% 
+  mutate(mutator = ifelse(line %in% c("Aar+6", "Ara+3", "Ara-4", "Ara-2", "Ara-1", "Ara-3"), TRUE, FALSE), 
+         gene_type = ifelse(grepl("ECB", target_id), "ECB",                                               
+                            ifelse(grepl("ERC", target_id), "ERCC", "tRNA")),
+         gene_type = ifelse(grepl("ins", rel_name, ignore.case = TRUE) | grepl("ins", k12_name, ignore.case = TRUE), "ins", gene_type))
+
+# I don't like uppercase letters
+names(big.df2) <- tolower(names(big.df2))
+
+head(big.df2)
+```
+
+Those are all phage proteins.
+```{r}
+big.df2 %>% 
+  filter(gene_type == "ins") %>% 
+  pull(rel_product) %>% 
+  unique()
+```
+Save it
+```{r}
+write_csv(big.df2, "../../data_frames/all_data.csv")
+```
+
+```{r}
+sessionInfo()
+```
+

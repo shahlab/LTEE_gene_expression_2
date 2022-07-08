@@ -1,0 +1,299 @@
+---
+title: "Figure S7"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+```{r}
+library(tidyverse)
+library(patchwork)
+library(ggpubr)
+library(scales)
+library(broom)
+```
+
+```{r}
+mut.levels <- read_csv("../../data_frames/all_data.csv") %>%
+  filter(gene_type == "ECB") %>% 
+  select(line, mutator) %>%
+  arrange(mutator, line) %>%
+  unique() %>%
+  pull(line)
+
+mut.colors <- c(rep("black", 6), rep("firebrick3", 5))
+
+kegg.results <- read_csv("../../data_frames/table_s9_kegg_results.csv") %>% 
+  filter(seqtype == "ribo") %>% 
+  mutate(line = factor(line, levels = mut.levels))
+
+pps.df <- read_csv("../../data_frames/full_pps_data.csv") %>% 
+  filter(seqtype == "ribo") %>% 
+  mutate(line = factor(line, levels = mut.levels))
+```
+
+Remove some odd characters in PPS scores.
+```{r}
+pps.df$common_name <- gsub("<i>N<\\/i>", "N", pps.df$common_name) %>%
+  gsub("<i>O<\\/i>", "O", .) %>%
+  gsub("(<i>E. coli<\\/i>)", "", .) %>% 
+  gsub("\\(\\)", "", .)
+```
+
+### Panel A
+
+The top 10 kegg categories defined by being significant in the most number of lines and occurring in all lines datasets (metabolic pathways is the only one that doesn't it's not really a useful category anyway). In the event of a tie, the one with the higher mean enrichment score is chosen. 
+```{r}
+occurs.in.all <- kegg.results %>% 
+  group_by(description) %>% 
+  tally() %>% 
+  ungroup() %>% 
+  filter(n == 11) %>% 
+  pull(description)
+
+top10 <- kegg.results %>% 
+  filter(qvalues <= .05 & description %in% occurs.in.all) %>% 
+  group_by(description) %>% 
+  summarise(n = n(),
+            mean_e = mean(enrichmentscore, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  arrange(desc(n)) %>% 
+  slice(1:10) %>%
+  arrange(desc(mean_e)) %>% 
+  pull(description)
+```
+
+A heatmap showing those categories
+```{r fig.width = 8, fig.height = 5}
+pa <- kegg.results %>%
+  filter(description %in% top10 &
+           description %in% occurs.in.all) %>%
+  mutate(
+    description = factor(description, levels = rev(top10)),
+    cuts = cut(
+      qvalues,
+      c(1, .05, .01, .001, .0001,-Inf),
+      labels = c("****", "***", "**", "*", "")
+    ),
+  ) %>%
+  ggplot(., aes(line, description, fill = enrichmentscore, label = cuts)) +
+  geom_raster() +
+  theme_bw() +
+  theme(
+    text = element_text(size = 14),
+    legend.position = "right",
+    axis.text.x = element_text(color = mut.colors, angle = 30, hjust = 1),
+    panel.grid = element_blank()
+  ) +
+  labs(x = NULL, y = NULL, title = "A") +
+  scale_fill_gradientn(
+    colors = c("indianred", "white", "steelblue"),
+    na.value = "grey30",
+    name = "Enrichment\nscore",
+    breaks = c(-1, 0, 1),
+    limits = c(-1, 1),
+    guide = guide_colorbar(ticks.colour = "black")
+  ) +
+  geom_text() +
+  scale_y_discrete(labels = label_wrap(width = 40))
+
+pa
+```
+
+### Panel B
+
+A distribution of pairwise correlations compared to another null distribution using the superset of significant categories. Find the superset
+```{r}
+sig.cats <- kegg.results %>% 
+  filter(qvalues <= .05 & description %in% occurs.in.all) %>% 
+  pull(description) %>% 
+  unique()
+```
+
+Find pairwise correlations.
+```{r}
+cors <- kegg.results %>% 
+  filter(description %in% sig.cats) %>% 
+  select(line, description, enrichmentscore) %>% 
+  pivot_wider(names_from = line, values_from = enrichmentscore) %>% 
+  select(where(is.numeric)) %>% 
+  cor(use = "pairwise.complete.obs") %>% 
+  .[upper.tri(.) == TRUE] %>% 
+  as_tibble()
+```
+
+Make a plot.
+```{r}
+pb <- cors %>%
+  ggplot(., aes("", value)) +
+  geom_boxplot(outlier.colour = NA, width = .4) +
+  geom_jitter(size = 1)+
+  labs(y = expression(paste(rho, " of enrichment scores",  sep = "")),
+       x = NULL,
+       title = "B") +
+  theme_bw() +
+  theme(text = element_text(size = 14),
+        panel.grid = element_blank())
+
+pb
+```
+
+### Panel C
+
+The same, but for PPS scores. They're sorted in order of highest mean PPS, 
+```{r}
+pps.occur <- pps.df %>% 
+  filter(type == "actual") %>% 
+  group_by(pathway, common_name) %>% 
+  tally() %>% 
+  ungroup() %>% 
+  filter(n == 11) %>% 
+  pull(common_name)
+
+top.10.pps <- pps.df %>% 
+  filter(type == "actual" & common_name %in% pps.occur) %>% 
+  group_by(pathway, common_name) %>% 
+  summarise(mean_pps = mean(pps), 
+            varz = var(pps)) %>% 
+  ungroup() %>% 
+  arrange(desc(mean_pps), varz) %>% 
+  slice(1:10) %>% 
+  pull(common_name) %>% 
+  rev()
+```
+
+```{r fig.width = 8, fig.height = 5}
+pc <- pps.df %>% 
+  filter(common_name %in% top.10.pps & type == "actual") %>% 
+  mutate(common_name = factor(common_name, levels = top.10.pps)) %>% 
+  ggplot(., aes(line, common_name, fill = pps))+
+  geom_raster()+
+  scale_fill_viridis_c(option = "D", name = "PPS")+
+  theme_bw() +
+  theme(
+    text = element_text(size = 14),
+    axis.text.x = element_text(color = mut.colors, angle = 30, hjust = 1),
+    panel.grid = element_blank(),
+    legend.position = "right"
+  ) +
+  labs(x = NULL, y = NULL, title = "C")+
+  scale_y_discrete(labels = label_wrap(width = 40))
+
+pc
+```
+
+### Panel D
+
+The same as B but for PPS
+```{r}
+pps.cors <- pps.df %>% 
+  filter(type == "actual") %>% 
+  select(line, pathway, pps) %>% 
+  pivot_wider(names_from = line, values_from = pps) %>% 
+  select(where(is.numeric)) %>% 
+  cor(use = "pairwise.complete.obs") %>% 
+  .[upper.tri(.) == TRUE] %>% 
+  as_tibble() %>% 
+  mutate(iteration = "real")
+```
+
+Now show this distribution using the randomized PPS. That is, in the analysis file, the fold-changes were randomized prior to calculating PPS, meaning 1. you'll have lower overall PPS because there are no coordinated changes and 2. the correlations among lines is lower because you've lost whatever parallel changes have occurred. 
+```{r}
+exp.pps.cors <- pps.df %>% 
+  filter(type == "random") %>% 
+  split(.$iteration) %>% 
+  map(function(x){
+    x %>% 
+      select(line, pathway, pps) %>% 
+      pivot_wider(names_from = line, values_from = pps) %>% 
+      column_to_rownames("pathway") %>% 
+      cor(use = "pairwise.complete.obs", method = "spearman") %>% 
+      .[upper.tri(.)] %>% 
+      as_tibble()
+  }) %>% 
+  bind_rows(.id = "iteration")
+```
+
+```{r}
+pps.bracket.df <- ks.test(pps.cors$value, exp.pps.cors$value) %>% 
+  tidy() %>% 
+  mutate(
+    label = cut(
+    p.value,
+    c(1, .05, .01, .001, .0001, -Inf),
+    labels = c("****", "***", "**", "*", "")
+    ),
+    xmin = "Expected",
+    xmax = "Observed",
+    y.position = .8)
+```
+
+
+```{r}
+# make a df for the actual points, make a column where outliers are NA
+# so the boxplot is made using the full data (displaying outliers) but
+# said outliers aren't double plotted by the jitter
+pps1 <- as_tibble(pps.cors) %>% 
+  mutate(points = case_when(value - quantile(value)[4] > 1.5*IQR(value) ~ NA_real_,
+                                  quantile(value)[2] - value > 1.5*IQR(value) ~ NA_real_,
+                                  TRUE ~ value))
+
+# the fake cors should have no points to plot, there'd be too many
+# this will plot outliers as normal
+pps2 <- exp.pps.cors %>% 
+  mutate(points = NA)
+
+
+pd <- bind_rows("Observed" = pps1, "Expected" = pps2, .id = "type") %>% 
+  ggplot(., aes(type, value))+
+  geom_boxplot(outlier.size = 1)+
+  geom_jitter(inherit.aes = FALSE, aes(type, points), height = 0, size = 1)+
+  labs(y = expression(paste(rho, " of PPS scores",  sep = "")),
+       x = NULL, 
+       title = "D")+
+  theme_bw()+
+  theme(text = element_text(size = 14), 
+        panel.grid = element_blank())+
+  geom_bracket(data = pps.bracket.df, vjust = .5)+
+  scale_y_continuous(breaks = seq(-.2, .8, .2))
+
+pd
+```
+
+### Final figure
+
+```{r fig.width = 11, fig.height = 8.5}
+top <- (pa | pb) + plot_layout(widths = c(.78, .22))
+
+bottom <- (pc | pd) + plot_layout(widths = c(.75, .25))
+
+(ff <- top / bottom)
+```
+
+Save it in various formats
+```{r}
+ggsave(ff, filename = "../../figures/fig_s7.png", width = 11, height = 8.5)
+
+ggsave(ff, filename = "../../figures/fig_s7.pdf", device = cairo_pdf, width = 11, height = 8.5)
+
+write_rds(ff, "../../figures/fig_s7.rds")
+```
+
+```{r}
+sessionInfo()
+```

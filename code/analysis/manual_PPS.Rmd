@@ -1,0 +1,236 @@
+---
+title: "Manual PPS"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r warning = FALSE, message = FALSE}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+As in the KEGG analysis, deletions are represented as -10 here.
+```{r}
+library(tidyverse)
+library(parallel)
+
+all.data <- read_csv("../../data_frames/all_data.csv") %>% 
+  filter(gene_type == "ECB") %>% 
+  mutate(ds_log2foldchange_rna = ifelse(deleted == TRUE, -10, ds_log2foldchange_rna),
+         ds_log2foldchange_ribo = ifelse(deleted == TRUE, -10, ds_log2foldchange_ribo))
+
+head(all.data)
+```
+
+This calculation can be done on the biocyc website, but not in the high throughput manner that I require. I've created a manual implementation of it which yields the same numbers as their site. 
+
+### Set up the needed files
+
+The PPS score from biocyc is a way to score alterations to pathways given that the enzyme created by a gene has a known chemical reaction and that reaction is part of a known pathway. The hierarchy there is extremely important for this, it goes genes -> enzymes -> reactions -> pathways. These 4 files contain the information necessary to relate those 4 categories. 
+```{r}
+(og.ecb.to.frame <- read_tsv("../../biocyc_files/rel_ecb_to_frame.txt") %>%
+  dplyr::rename("gene" = 1, "target_id" = 2))
+
+(og.genes.of.enzymes <- read_tsv("../../biocyc_files/rel_enzymes_of_genes.txt") %>%
+  dplyr::rename("enzyme" = 1, "gene" = 2))
+ 
+(og.enzymes.of.reactions <- read_tsv("../../biocyc_files/rel_enzymes_of_reactions.txt") %>%
+  dplyr::rename("reaction" = 1, "enzyme" = 2))
+
+(og.reactions.of.pathways <- read_tsv("../../biocyc_files/rel_reactions_of_pathways.txt") %>%
+  dplyr::rename("pathway" = 1, "reaction" = 2))
+```
+
+Additionally, a translation of the IDs to useful names
+```{r}
+path.trans <- read_tsv("../../biocyc_files/pathway_to_common.txt") %>%
+  rename(pathway = Pathways, "common_name" = "Common-Name")
+```
+
+Some of the cells have compounded information, i.e. one entity in the first col has multiple things in the second col. Here I manipulate the data to give 1:1 relationships between the two columns. Rows should increase in all cases.
+```{r}
+gene.to.enzyme <- og.genes.of.enzymes %>%
+  separate(gene, into = letters, sep = " // ") %>%
+  pivot_longer(., cols = letters, names_to = "variable", values_to = "gene") %>%
+  select(-variable) %>%
+  unique() %>%
+  filter(!is.na(gene))
+
+enzyme.to.reaction <- og.enzymes.of.reactions %>%
+  separate(enzyme, into = letters, sep = " // ") %>%
+  pivot_longer(., cols = letters, names_to = "variable", values_to = "enzyme") %>%
+  select(-variable) %>%
+  unique() %>%
+  filter(!is.na(enzyme))
+
+reaction.to.pathway <- og.reactions.of.pathways %>%
+  separate(reaction, into = paste0("v", 1:50), sep = " // ") %>%
+  pivot_longer(., cols = paste0("v", 1:50), names_to = "variable", values_to = "reaction") %>%
+  select(-variable) %>%
+  unique() %>%
+  filter(!is.na(reaction))
+
+og.ecb.to.frame
+gene.to.enzyme
+enzyme.to.reaction
+reaction.to.pathway
+```
+
+Check for NA in any of those because that would cause an issue
+```{r}
+lapply(list(gene.to.enzyme, enzyme.to.reaction, reaction.to.pathway), function(x){
+  col1 <- any(is.na(x[,1]))
+  col2 <- any(is.na(x[,2]))
+  
+  return(paste("col1 have NA?", col1, "col2 have NA?", col2))
+})
+```
+
+Lastly, a function that allows one to find ECB numbers that are part of a pathway.
+```{r}
+# this takes a pathway ID, something like PWY0-1312, or a vector of IDs
+find_ECB_from_path <- function(x){
+  v1 <- reaction.to.pathway %>%
+    filter(pathway %in% x) %>%
+    pull(reaction)
+
+  v2 <- enzyme.to.reaction %>%
+    filter(reaction %in% v1) %>%
+    pull(enzyme)
+
+  v3 <- gene.to.enzyme %>%
+    filter(enzyme %in% v2) %>%
+    pull(gene)
+  
+  og.ecb.to.frame %>%
+    filter(gene %in% v3)
+}
+```
+
+### Prepare input data for PPS calculation
+
+Here, prepare the data that is needed for the PPS calculations. The function that calculates PPS requires a data frame that is target_id, line, and l2fc.
+```{r}
+real.fc.list <- all.data %>%
+  filter(gene_type == "ECB") %>%
+  select(line, target_id, ds_log2foldchange_rna, ds_log2foldchange_ribo) %>%
+  pivot_longer(., cols = starts_with("ds_"), names_to = "seqtype", values_to = "l2fc") %>%
+  mutate(seqtype = str_remove(seqtype, "ds_log2foldchange_")) %>%
+  filter(!is.na(l2fc)) %>%
+  split(.$seqtype) %>%
+  map(function(x){select(x, -seqtype)})
+
+real.fc.list
+```
+
+We also need a set of randomized fold changes to create null distributions. This chunk creates 100 instances of randomized fold changes for each seqtype and line. 
+```{r}
+# do this 100 times
+rand.dfs <- mclapply(1:100, function(z){
+  # take each of the seqtype dfs
+  lapply(real.fc.list, function(x){
+    # and split the df by line
+    x %>%
+    split(.$line) %>%
+    map(function(y){
+      # reorder the l2fcs
+      y$l2fc <- sample(y$l2fc, size = length(y$l2fc), replace = FALSE)
+      
+      # add an iteration column
+      y$iteration <- z
+      
+      return(y)
+    }) %>%
+    bind_rows()
+  }) %>%
+  bind_rows(.id = "seqtype")
+}, mc.cores = 8) %>%
+  bind_rows()
+
+rand.df.list <- rand.dfs %>%
+  split(list(.$iteration, .$seqtype)) %>%
+  map(.f = select, -iteration, -seqtype)
+
+rand.df.list[[1]]
+```
+
+### Calculate PPS
+
+PPS calculator function, this takes 1 argument, a data frame with columns line, target_id, l2fc.
+```{r}
+pps_calc <- function(df, type){
+  # relate fcs to genes
+  fcs.g <- left_join(df, og.ecb.to.frame, by = "target_id") %>%
+    select(-target_id) %>%
+    filter(is.na(gene) == FALSE)
+  
+  # relate the above to an enzyme
+  fcs.g.e <- left_join(fcs.g, gene.to.enzyme, by = "gene") %>%
+    filter(is.na(enzyme) == FALSE)
+  
+  # relate the above to a reaction
+  fcs.g.e.r <- left_join(fcs.g.e, enzyme.to.reaction, by = "enzyme") %>%
+    filter(is.na(reaction) == FALSE)
+  
+  # calculate the RPS, i.e. max(abs(l2fc))
+  rps <- fcs.g.e.r %>%
+    group_by(line, reaction) %>%
+    summarise(rps = max(abs(l2fc), na.rm = TRUE)) %>%
+    ungroup() %>%
+    mutate(rps2 = rps^2) %>% 
+    select(-rps)
+  
+  # calculate PPS, i.e. sqrt((sum(rps2)/n rps))
+  pps <- left_join(rps, reaction.to.pathway, by = "reaction") %>%
+    filter(is.na(pathway) == FALSE) %>%
+    group_by(line, pathway) %>%
+    summarise(pps = sqrt((sum(rps2, na.rm = TRUE)/n()))) %>%
+    ungroup()
+
+  return(pps)
+}
+```
+
+Run the calculator on the actual data and randomized data
+```{r}
+(real.pps <- lapply(real.fc.list, pps_calc) %>%
+  bind_rows(.id = "seqtype") %>%
+  mutate(type = "actual") %>%
+  arrange(desc(pps)))
+
+(rand.pps <- mclapply(rand.df.list, pps_calc, mc.cores = 8) %>%
+  bind_rows(.id = "sample") %>% 
+  separate(sample, into = c("iteration", "seqtype")) %>%
+  filter(!is.infinite(pps)) %>%
+  mutate(type = "random"))
+```
+
+Join those two dfs rowwise, the NAs in iteration column for the real data have to be replaced with something otherwise if you read it in and these rows are first, it will have a parsing failure upon reading in because it's a ton of NAs in a column. 
+```{r}
+(pps.df <- bind_rows(real.pps, rand.pps) %>%
+  left_join(., path.trans, by = "pathway") %>%
+   replace_na(replace = list(iteration = "real")))
+```
+
+Save it. **PAY ATTENTION**, two files are saved here, a df with all the PPS scores (both randomized and actual) and just actual. The real data is sent to the supplementary data file because otherwise the data frame is unnecessarily huge and the full data is sent to a different file that can be loaded for analyses. 
+```{r}
+write_csv(pps.df %>% filter(type == "actual") %>% select(-type, -iteration), "../../data_frames/table_s11_pps_scores.csv")
+
+write_csv(pps.df, "../../data_frames/full_pps_data.csv")
+```
+
+```{r}
+sessionInfo()
+```
+

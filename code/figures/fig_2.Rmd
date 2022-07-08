@@ -1,0 +1,400 @@
+---
+title: "Figure 2"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+```{r}
+library(tidyverse)
+library(ggpubr)
+library(png)
+library(grid)
+library(ggpointdensity)
+library(ggrepel)
+library(scales)
+library(patchwork)
+library(broom)
+library(ggridges)
+```
+
+### Panel A
+
+The formula for volume is $\frac{\pi W^2}{4} * (L - \frac{W}{3})$, as code it's  
+`((pi * (SHAPE.width.mean^2))/4) * (SHAPE.length - (SHAPE.width.mean / 3))`.
+```{r}
+size.df <- read_csv("../../data_frames/table_s3_cell_size.csv") %>% 
+  mutate(volume = ((pi * (SHAPE.width.mean^2))/4) * (SHAPE.length - (SHAPE.width.mean / 3)),
+         mutator = ifelse(line %in% c("Ara+6", "Ara+3", "Ara-4", "Ara-2", "Ara-1", "Ara-3"), TRUE, FALSE),
+         age = ifelse(grepl("REL", line), "old", "young")) %>% 
+  filter(line != "Ara+6")
+
+head(size.df)
+```
+
+```{r}
+# the data frame for panel A
+adf <- size.df %>%
+  mutate(line = ifelse(grepl("REL", line), "Anc", line))
+
+# Get the median ancestral volume for a dotted line
+# note that it's hard coded in the plot because it won't
+# save as an Rdata object correctly otherwise
+anc.median.volume <- adf %>%
+  filter(line == "Anc") %>%
+  summarise(median.volume = median(volume)) %>%
+  pull(median.volume)
+
+# factor the lines in order
+mut.levels <- adf %>%
+  dplyr::select(line, mutator) %>%
+  arrange(mutator, line) %>%
+  unique() %>%
+  pull(line)
+
+adf$line <- factor(adf$line, levels = mut.levels)
+
+# set mut colors for x axis labels
+mut.colors.a <- c("black", rep("black", 6), rep("firebrick3", 5))
+
+# get new x labs with the number of cells imaged
+newxlabs.volume <- adf %>%
+  group_by(line) %>%
+  tally() %>%
+  ungroup() %>%
+  mutate(newlab = paste0(line, "\n", n)) %>%
+  pull(newlab)
+
+# reduce the df to only things needed for the graph, this may reduce the final size of the rds
+adf2 <- adf %>% 
+  select(line, volume)
+```
+
+KS tests to the ancestor
+```{r}
+line.list <- adf %>% 
+  split(.$line)
+
+stars.df <- lapply(line.list[names(line.list) != "Anc"], function(x){
+  ks.test(x$volume, line.list$Anc$volume, exact = TRUE) %>% 
+   tidy() 
+}) %>% 
+  bind_rows(.id = "line") %>% 
+  mutate(stars = cut(
+    p.value,
+    c(1, .05, .01, .001, .0001, -Inf),
+    labels = c("****", "***", "**", "*", "NS")))
+```
+
+The plot
+```{r}
+# the median needs to be hard coded in to get it 
+# to save as an Rdata object, it's 0.8170652
+# median(adf[adf$age == "old",]$volume)
+
+pa <- adf2 %>%
+  ggplot(., aes(line, volume))+
+  geom_hline(aes(yintercept = 0.8170652), linetype = 5)+
+  geom_boxplot(outlier.size = 1, width = .7)+
+  labs(x = NULL, 
+       y = "Cell volume (fL)",
+       title = "A")+
+  scale_x_discrete(labels = newxlabs.volume)+
+  theme_bw()+
+  theme(text = element_text(size = 14),
+        panel.grid = element_blank(),
+        axis.text.x = element_text(color = mut.colors.a))+
+  scale_y_log10(limits = c(.05, 100))+
+  annotation_logticks(sides = "l")+
+  geom_text(aes(label = stars, y = 100), data = stars.df)
+
+pa
+```
+
+Add the external images
+```{r}
+png.a <- rasterGrob(readPNG("../../figures/bac_images.png"), interpolate = TRUE)
+
+(pa2 <- pa + annotation_custom(png.a, xmin = .55, xmax = 12.54, ymin = -1.5, ymax = -.5))
+```
+
+### Panel B
+
+Example linear model showing relationship between predicted number of ERCC added and it's TPM in the sample.
+```{r}
+ercc.df <- read_csv("../../data_frames/table_s5_ercc_molecules_per_sample.csv") %>%
+  filter(line == "Ara+1" & seqtype == "rna")
+
+head(ercc.df)
+```
+
+Plot for a single line
+```{r}
+pb <- ercc.df  %>%
+  ggplot(., aes(molecules_of_seq, tpm, color = repl))+
+  geom_point()+
+  geom_smooth(method = "lm", se = FALSE)+
+  stat_cor(aes(label = ..r.label..), show.legend = FALSE, label.x.npc = .01, label.y.npc = .99)+
+  scale_y_log10(breaks = c(10^-2, 10^0, 10^2), labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+  scale_x_log10(breaks = c(1e3, 1e5, 1e7, 1e9), labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+  theme_bw()+
+  theme(text = element_text(size = 14),
+        legend.position = c(.18, .75),
+        legend.key = element_blank(),
+        legend.background = element_blank(),
+        panel.grid = element_blank())+ 
+  scale_color_manual(values = c("black", "grey50"),
+                     name = NULL,
+                     labels = c("Rep 1", "Rep 2"))+
+  labs(y = "TPM",
+       x = "Molecules of ERCC oligo added",
+       title = "B")+
+  annotate("text", label = "Ara+1", x = 2e8, y = 1e-3)
+
+pb
+```
+
+### Panel C
+
+Scatterplot of changes in absolute amounts. 
+```{r}
+mols.per.cfu.df <- read_csv("../../data_frames/table_s6_mRNAs_per_cfu.csv")
+
+head(mols.per.cfu.df)
+```
+
+Compute an ancestral average molecules_per_cfu from the 4 ancestral samples.
+```{r}
+anc.means <- mols.per.cfu.df %>% 
+  filter(line %in% c("REL606", "REL607")) %>% 
+  group_by(target_id) %>% 
+  summarise(anc_mean_mol_per_cfu = mean(n_mol_per_cfu))
+
+head(anc.means)
+```
+
+The data frame for the plot, shows the average molecules per cfu for one line compared to that of the ancestors. 
+```{r}
+cdf <- mols.per.cfu.df %>% 
+  filter(line == "Ara+1") %>% 
+  group_by(line, target_id) %>% 
+  summarise(mean_mol_per_cfu = mean(n_mol_per_cfu)) %>%
+  left_join(anc.means, by = "target_id")
+
+head(cdf)
+```
+
+Make the plot.
+```{r fig.width = 3.5, fig.height = 3.5}
+pc <- cdf %>% 
+  ggplot(., aes(anc_mean_mol_per_cfu, mean_mol_per_cfu))+
+  geom_abline(aes(slope = 1, intercept= 0), linetype = 5)+
+  geom_point(size = 1)+
+  geom_pointdensity(size = 1)+
+  scale_x_log10(limits = c(1e-4, 2e4), breaks = c(1e-3, 1e0, 1e3), labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+  scale_y_log10(limits = c(1e-4, 2e4), breaks = c(1e-3, 1e0, 1e3), labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+  theme_bw()+
+  theme(text = element_text(size = 14),
+        panel.grid = element_blank())+
+  labs(x = "Molecules / CFU ancestor",
+       y = "Molecules / CFU evolved",
+       title = "C")+
+  scale_color_viridis_c(option = "B",
+                        name = "Neighboring\npoints",
+                        guide = "none")+
+  stat_cor(aes(label = ..r.label..))+
+  annotate("text", label = "Ara+1", x = 3e3, y = 1e-4)
+
+pc
+```
+
+### Panel D
+
+This panel will be a ridge lines plot showing the fold change in molecules per cfu between replicates, and also from each evolved line to the ancestors. First, get the number comparing replicates.
+```{r}
+rep.compares <- mols.per.cfu.df %>%                            #
+  split(.$line) %>%                                            # for each line
+  map(function(x){                                             #
+    x %>%                                                      #
+      select(line, repl, target_id, n_mol_per_cfu) %>%         # retain the columns
+      pivot_wider(names_from = repl,                           # reshape the data
+                  values_from = n_mol_per_cfu) %>%             #
+      mutate(ratio = rep1/rep2) %>%                            # find ratio between replicates
+      filter(!is.na(ratio) & !is.infinite(ratio) & ratio != 0) # keep non-zero numbers
+  }) %>%
+  bind_rows() %>%                                              # put them back together
+  select(line, ratio)                                          # retain these rows                                          
+
+head(rep.compares)
+```
+
+Next, find the ratio between the mean from the evolved lines to the mean of the ancestors.
+```{r}
+evo.to.anc.ratios <- mols.per.cfu.df %>%                      #
+  filter(grepl("Ara", line)) %>% 
+  group_by(line, target_id) %>%                               # for each gene in each line
+  summarise(mean_mol_per_cfu = mean(n_mol_per_cfu)) %>%       # get the average of the two reps
+  left_join(., anc.means) %>%                                 # add a col for ancestral mean
+  mutate(ratio = mean_mol_per_cfu / anc_mean_mol_per_cfu) %>% # find the evo/anc ratio
+  select(line, ratio) %>%                                     # retain these cols
+  filter(!is.na(ratio) & !is.infinite(ratio) & ratio != 0)    # keep non-zero numbers
+
+head(evo.to.anc.ratios)
+```
+
+Combine the replicates and evolved to ancestor comparison, adding mutator info in the process. 
+```{r}
+combo.df <- bind_rows("intrarep" = rep.compares, "evoanc" = evo.to.anc.ratios, .id = "comp")
+
+head(combo.df)
+```
+
+Then make a graph
+```{r}
+# line order on y axis
+combo.df$line <- factor(combo.df$line, levels = c("REL606", "REL607", mut.levels))
+
+# mutator colors
+mut.colors.d <- c(rep("black", 8), rep("firebrick3", 5))
+
+# KS tests to show that those are indeed different
+kstests <- combo.df %>%
+  filter(str_detect(line, "Ara")) %>%
+  split(.$line, drop = TRUE) %>%
+  map(function(x) {
+    # get the intrarep ratios
+    intrareps <- filter(x, comp == "intrarep")$ratio
+    
+    # get the anc to evo ratios
+    evoancs <- filter(x, comp == "evoanc")$ratio
+    
+    # run the test ad tidy the results
+    ks.test(intrareps, evoancs) %>%
+      tidy()
+  }) %>% 
+  bind_rows(.id = "line") %>% 
+  mutate(stars = cut(
+    p.value,
+    c(1, .05, .01, .001, .0001, -Inf),
+    labels = c("****", "***", "**", "*", "")))
+```
+
+the plot
+```{r}
+pd <- combo.df %>%
+  ggplot(., aes(x = ratio, y = line, fill = comp))+
+  geom_vline(aes(xintercept = 1), linetype = 5)+
+  geom_density_ridges()+
+  theme_bw()+
+  theme(text = element_text(size = 14),
+        panel.grid = element_blank(),
+        axis.text.y = element_text(color = mut.colors.d))+
+  labs(x = "Fold change in molecules / CFU", 
+       y = NULL,
+       title = "D")+
+  scale_fill_manual(values = c("#5F4B8BFF", "#E69A8DFF"),
+                    name = NULL,
+                    labels = c("Evolved/Ancestor", "Rep1/Rep2"),
+                    guide = "none")+
+  scale_x_log10(limits = c(.1, 1e3),
+                labels = label_number_si())+
+  geom_text(inherit.aes = FALSE, data = kstests, aes(x = 900, y = line, label = stars), vjust = .1)
+
+pd
+```
+
+The ranges of those dists
+```{r}
+combo.df %>% 
+  group_by(comp, line) %>% 
+  summarise(minn = min(ratio),
+            maxx = max(ratio))
+```
+
+
+### Panel E
+
+Correlation between size and molecules per cfu. Get median/mean sizes
+```{r}
+(avg.sizes <- size.df %>%
+  group_by(line) %>%
+  summarise(median_cfuume = median(volume),
+            mean_cfuume = mean(volume)) %>%
+  ungroup())
+```
+
+Get total RNA per cfu for each line
+```{r}
+mols.cfu.per.line <- mols.per.cfu.df %>%
+  group_by(repl, line, seqtype) %>%
+  summarise(total_rna_per_cfu = sum(n_mol_per_cfu)) %>%
+  ungroup()
+```
+
+Join those and find the average between replicates. 
+```{r fig.width = 4, fig.height = 4}
+edf <- left_join(avg.sizes, mols.cfu.per.line, by = "line") %>%                                    #
+  group_by(line, median_cfuume) %>%                                                                # for each line
+  summarise(rna = mean(total_rna_per_cfu, na.rm = TRUE)) %>%                                       # find mean of total RNA per CFU between reps
+  ungroup() %>%                                                                                    #
+  mutate(mutator = ifelse(line %in% c("Ara-1", "Ara-2", "Ara-3", "Ara+3", "Ara-4"), "mut", "not")) # add mutator info
+```
+
+Plot.
+```{r}
+pe <- edf %>% 
+  ggplot(., aes(median_cfuume, rna, label = line, color = mutator))+
+  geom_smooth(method = "lm", inherit.aes = FALSE, aes(x = median_cfuume, y = rna), se = FALSE, color = "black")+
+  geom_point()+
+  geom_text_repel(min.segment.length = .00001, box.padding = .5, alpha = .5, seed = 10)+
+  stat_cor(aes(x = median_cfuume, y = rna), inherit.aes = FALSE)+
+  theme_bw()+
+  theme(text = element_text(size = 14),
+        panel.grid = element_blank())+
+  labs(x = "Median cell volume (fL)",
+       y = "Molecules / CFU",
+       title = "E")+
+  scale_color_manual(values = c("firebrick3", "black"), guide = "none")+
+  scale_y_log10(labels = scales::label_number_si())+
+  scale_x_continuous(limits = c(.5, 3.5))
+
+pe
+```
+
+### Final figure
+
+```{r fig.width = 11, fig.height = 7.5}
+top <- (pa2 | pb) + plot_layout(widths = c(.7, .3))
+
+bottom <- (pc | pd | pe) + plot_layout(widths = c(.3, .4, .3))
+
+(ff <- (top / bottom))
+```
+
+Save it in various formats
+```{r}
+ggsave(ff, filename = "../../figures/fig_2.png", width = 11, height = 7.5)
+
+ggsave(ff, filename = "../../figures/fig_2.pdf", device = cairo_pdf, width = 11, height = 7.5)
+
+write_rds(ff, "../../figures/fig_2.rds")
+```
+
+```{r}
+sessionInfo()
+```

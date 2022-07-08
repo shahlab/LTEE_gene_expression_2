@@ -1,0 +1,194 @@
+---
+title: "Compare to 2003 data"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+```{r message = FALSE, warning = FALSE}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+Here, I compare the findings from the 2003 paper to ours.
+
+Load packages
+```{r}
+library(tidyverse)
+```
+
+Load data
+```{r}
+old.data <- read_csv("../../data_frames/genes_2003.csv")
+
+all.data <- read_csv("../../data_frames/all_data.csv")
+
+mut.lines <- all.data %>% 
+  filter(mutator == TRUE) %>% 
+  pull(line) %>% 
+  unique()
+```
+
+Find all of the genes from their data in mine, only 39 are common between the two.
+```{r}
+their.genes <- old.data %>% 
+  pull(gene)
+
+my.rels <- all.data %>% 
+  pull(rel_name) %>% 
+  unique()
+
+(gene.intersection <- intersect(their.genes, my.rels))
+```
+
+Which ones are missing?
+```{r}
+setdiff(their.genes, my.rels)
+```
+
+I'm looking these up on ecocyc
+```{r}
+gene.rename <- c(
+  "flaG" = "flhB",
+  "b1009" = "rutD",
+  "ybaC" = "aes",
+  "yaeT" = "bamA",
+  "yafU" = "yafU", # couldn't find this one
+  "b0762" = "acrZ",
+  "b1044" = "ymdA",
+  "b1490" = "dosC",
+  "b2445" = "yffN",
+  "b2462" = "eutS",
+  "b2772" = "ygcU",
+  "b2809" = "ygdI",
+  "yaeJ" = "arfB",
+  "ydfC" = "ydfC", # this one too, but it's a prophage
+  "yjgF" = "ridA",
+  "yjiD" = "iraD",
+  "ykfB" = "ykfB", # again, a prophage
+  "yohH" = "mdtQ",
+  "yliJ" = "gstB",
+  "b1168" = "pdeG",
+  "yhcJ" = "nanE",
+  "yjcP" = "mdtP"
+)
+
+(rename.df <- enframe(gene.rename, name = "gene", value = "ecocyc_name"))
+```
+
+Can I find all 22 of those in my data? Just 15
+```{r}
+intersect(my.rels, rename.df$ecocyc_name)
+```
+
+Which are missing?
+```{r}
+setdiff(rename.df$ecocyc_name, my.rels)
+```
+
+I can only find two more using biocyc REL606 database, not ecocyc
+```{r}
+biocyc.names <- c(
+  "mdtQ" = "yohGH",
+  "dosC" = "yddV"
+)
+
+(biocyc.names.df <- enframe(biocyc.names, name = "ecocyc_name", value = "biocyc_name"))
+```
+
+Translate the names to the new ones. 
+```{r}
+# a df of the names I already have
+already.have <- data.frame(gene = gene.intersection,
+                           ecocyc_name = gene.intersection)
+
+final.names.df <- full_join(rename.df, biocyc.names.df) %>% 
+  bind_rows(already.have) %>% 
+  mutate(final_name = ifelse(is.na(biocyc_name), ecocyc_name, biocyc_name)) %>% 
+  select(gene, final_name)
+
+final.names.df
+```
+
+Get those fold changes, I get 54/58 and the missing ones are phages mostly. 
+```{r}
+my.fcs <- all.data %>% 
+  filter(rel_name %in% final.names.df$final_name) %>% 
+  select(line, rel_name, ds_log2foldchange_rna, ds_padj_rna)
+
+head(my.fcs)
+```
+
+Convert the old names to new names and process for graphing.
+```{r}
+top.df <- left_join(old.data, final.names.df) %>% 
+  select(-gene) %>% 
+  filter(final_name %in% my.fcs$rel_name) %>% 
+  pivot_longer(cols = where(is.numeric), values_to = "ds_log2foldchange_rna", names_to = "line") %>% 
+  mutate(study = "Cooper 2003",
+         direc = sign(ds_log2foldchange_rna),
+         ds_padj_rna = 1) %>% 
+  select(line, final_name, direc, ds_padj_rna, study) %>% 
+  rename("rel_name" = "final_name")
+```
+
+Get my direction changes. 
+```{r}
+bottom.df <- my.fcs %>% 
+  mutate(direc = sign(ds_log2foldchange_rna),
+         study = "This study") %>% 
+  select(line, rel_name, direc, ds_padj_rna, study) 
+```
+
+```{r}
+gene.order <- sort(unique(top.df$rel_name))
+
+line.levels <- c(paste0("Ara+", 2:6), paste0("Ara-", 2:6), "Ara-1", "Ara+1")
+
+mut.colors <- sapply(line.levels, function(x){
+  if (x %in% mut.lines){
+    return("firebrick3")
+  } else {
+    return("black")
+  }
+})
+```
+
+```{r}
+plot_fun <- function(x){
+  if (x$study[1] != "This study"){
+    mytitle = "A"
+    
+    ycolors <- "black"
+  } else {
+    mytitle = NULL
+    
+    ycolors <- mut.colors
+  }
+  
+  ggplot(x, aes(factor(rel_name, levels = gene.order), factor(line, levels = line.levels), fill = factor(direc)))+
+  geom_raster()+
+  scale_fill_manual(values = c("indianred", "steelblue"), na.translate = FALSE, guide = FALSE)+
+  facet_wrap(~study, ncol = 1)+
+  theme_bw()+
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1, size = 10),
+        axis.text.y = element_text(hjust = 0, color = ycolors),
+        text = element_text(size = 14))+
+    labs(x = NULL,
+         y = NULL,
+         title = mytitle)
+}
+
+pa.bottom <- plot_fun(bottom.df)
+
+pa.top <- plot_fun(top.df)
+```
+
+```{r fig.width = 11, fig.height = 5}
+pa.top
+pa.bottom
+```
+

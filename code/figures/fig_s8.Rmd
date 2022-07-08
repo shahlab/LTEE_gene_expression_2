@@ -1,0 +1,329 @@
+---
+title: "Figure S8"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+A single large figure where the top 5 up and down categories from each ontology are displayed, where the fill is their p-value, and the top 5 is determined by the number of times a category was significant in each line, i.e. a category that was significant 11 times would be the top category. 
+```{r}
+library(tidyverse)
+library(patchwork)
+library(scales)
+library(rtracklayer)
+
+go.df <- read_csv("../../data_frames/table_s10_go_results.csv")
+
+# mutator order and levels
+mut.levels <- read_csv("../../data_frames/all_data.csv") %>%
+  dplyr::select(line, mutator) %>%
+  arrange(mutator, line) %>%
+  unique() %>%
+  pull(line)
+
+mut.colors <- c("black", rep("black", 5), rep("firebrick3", 5))
+
+go.df$line <- factor(go.df$line, levels = mut.levels)
+
+pps.df <- read_csv("../../data_frames/full_pps_data.csv")
+
+kegg.df <- read_csv("../../data_frames/table_s9_kegg_results.csv")
+
+all.data <- read_csv("../../data_frames/all_data.csv") %>% 
+  filter(gene_type == "ECB")
+```
+
+Find the top10 categories, i.e. those that are significant in the most lines.  
+```{r}
+top.cats <- go.df %>% 
+  filter(ontology == "BP" & annotated <= 100 & !is.na(term)) %>% 
+  select(direction, ontology, term, total_sig, go.id) %>% 
+  unique() %>% 
+  arrange(desc(total_sig)) %>% 
+  dplyr::slice(1:10) %>% 
+  pull(term)
+
+adf <- go.df %>%
+  filter(term %in% top.cats) %>%
+  mutate(cuts = cut(
+    fisher,
+    c(1, .05, .01, .001, .0001,-Inf),
+    labels = c("****", "***", "**", "*", "")),
+    term = factor(term, levels = rev(top.cats)
+  ))
+```
+
+### Panel A
+
+```{r fig.width = 8, fig.height = 5}
+pa <-  adf %>%
+  ggplot(., aes(line, term, fill = direction, label = cuts))+
+  geom_raster()+
+  geom_text()+
+  scale_fill_manual(values = c("indianred", "steelblue"), name = NULL, labels = c("Downregulated", "Upregulated"))+
+  scale_y_discrete(labels = label_wrap(width = 30))+
+  theme_bw()+
+  theme(
+    text = element_text(size = 14),
+    legend.position = "bottom",
+    axis.text.x = element_text(color = mut.colors),
+    panel.grid = element_blank()
+  )+
+  labs(x = NULL, y = NULL, title = "A")
+
+pa
+```
+
+### Panel B
+
+RNAseq and riboseq enrichment scores and PPS scores are correlated. PPS:
+```{r}
+pps.rna.ribo.cors <- pps.df %>%                            #
+  filter(type == "actual") %>%                             # keep actual PPS, not randomized
+  select(pathway, line, pps, seqtype) %>%                  # retain these cols
+  pivot_wider(names_from = seqtype, values_from = pps) %>% # reshape each seqtype has its own col
+  split(.$line) %>%                                        # for each line
+  map(function(x){                                         # compare the rna/ribo scores
+    x %>%                                                  #
+      select(-line, -pathway) %>%                          # remove these cols
+      corrr::correlate(method = "spearman") %>%            # compare the RNAseq and riboseq cors
+      .[2,2]                                               # pick the correlation, the others are redundancies
+  }) %>%                                                   #
+  bind_rows(.id ="line") %>%                               # recombine the data
+  mutate(type = "PPS") %>%                                 # add a col that will differentiate from kegg
+  dplyr::rename("rs" = "rna")                              #
+```
+
+Do the same for the kegg.
+```{r}
+sig.terms <- kegg.df %>%
+  filter(seqtype == "ribo") %>% 
+  filter(qvalues <= .05) %>%
+  group_by(description) %>%
+  tally() %>%
+  ungroup() %>%
+  filter(!is.na(description)) %>%
+  pull(description)
+
+kegg.rna.ribo.cors <- kegg.df %>%                                      #
+  filter(description %in% sig.terms) %>%                               # consider all significant terms in any line
+  select(line, seqtype, id, enrichmentscore) %>%                       # retain these cols
+  pivot_wider(names_from = seqtype, values_from = enrichmentscore) %>% # reshape to rna/ribo cols
+  split(.$line) %>%                                                    # for each line
+  map(function(x){                                                     # compare the rna/ribo scores
+    x %>%                                                              #
+      select(-line, -id) %>%                                           # remove these cols
+      corrr::correlate(method = "spearman") %>%                        # correlate
+      .[2,2]                                                           # pick the cor, the other are redundant
+  }) %>%                                                               #
+  bind_rows(.id ="line") %>%                                           # recombine the lines
+  mutate(type = "Enrichment score") %>%                                # label to differentiate from pps
+  dplyr::rename("rs" = "ribo")                                         # rename that col
+```
+
+```{r}
+pb <- bind_rows(kegg.rna.ribo.cors, pps.rna.ribo.cors) %>%
+  ggplot(., aes(type, rs)) +
+  geom_jitter(height = 0, width = .2) +
+  geom_boxplot(fill = NA) +
+  theme_bw() +
+  theme(text = element_text(size = 14),
+        panel.grid = element_blank()) +
+  labs(x = NULL,
+       y = expression(paste(rho, " of RNA-seq and ribo-seq")),
+       title = "B") +
+  scale_y_continuous(limits = c(.7, 1))
+
+pb
+```
+
+### Panel C
+
+The non-nadR regulated genes from fig 5A. This is long, because in order to make this document self contained it requires all the code from the other figure.
+
+Read in the required items.
+```{r}
+# the list of mutations, and the specific clones for our mutations
+my.mutations <- read_csv("../../data_frames/table_s12_mutations.csv")
+
+# the ancestral gff
+anc.gff <- readGFFAsGRanges("../../gffs/AraR6.gff")
+```
+
+The colors for the operon membership on the x axis
+```{r}
+mycolors <- c("#ad0008","#392bab","#839000","#009590","#ca991b","#302974","#dc2b2a","#008746","#7e0025","#a0a569","#9a4f00")
+```
+
+The following functions allow you to start with a vector of named genes where the elements of the vector are the names of the genes and the names of elements are operon membership. The actual names don't matter, so long as they are different strings. This takes a few arguments  
+x = named vector of genes  
+title = title you want the heatmap to have, appears as a facet  
+threshold = min/max fold change to show, a positive integer   
+fig_letter = the figure letter, like A, B, C, etc  
+x_labs = a vector of x labels, namely for underlining purposes  
+The legend that appears with this is for the bottom mutations on genes plots, but it has to be made here
+
+The colors for the mutation plots
+```{r}
+snp.color <- "darkorchid"
+del.color <- "orange2"
+ins.color <- "forestgreen"
+```
+
+```{r}
+heatmap_function <- function(x, title, threshold, fig_letter, x_labs){
+  # make a df that is keys for operons membership
+  key.df <- enframe(x, value = "k12_name", name = "operon") %>% 
+    mutate(graph_label = title)
+  
+  # find fcs for those genes
+  fcdf <- all.data %>%
+    filter(k12_name %in% x) %>%
+    mutate(stars = cut(
+      ds_padj_rna,
+      c(1, .05, .01, .001, .0001,-Inf),
+      labels = c("****", "***", "**", "*", ""))) %>%
+    dplyr::select(line, k12_name, ds_log2foldchange_rna, stars) %>%
+    left_join(., key.df, by = "k12_name")
+  
+  # change min/max fcs to the threshold
+  fcdf$ds_log2foldchange_rna[fcdf$ds_log2foldchange_rna > threshold] <- threshold
+  fcdf$ds_log2foldchange_rna[fcdf$ds_log2foldchange_rna < -threshold] <- -threshold
+  
+  # factor x and y axis
+  fcdf$line <- factor(fcdf$line, levels = mut.levels)
+  fcdf$k12_name <- factor(fcdf$k12_name, levels = x)
+  
+  # create the color vector for the x axis
+  # both number of colors (length(rep.vec)) and n times to repeat each color
+  rep.vec <- table(key.df$operon)
+  
+  # make a vector where each color repeats the correct amount of times
+  color.vec <- sapply(1:length(rep.vec), function(y){
+    rep(mycolors[y], rep.vec[y])
+  }) %>% unlist()
+  
+  # randomly add one of the three mutation types to the df, this is only for the purpose
+  # of making their be a color legend of the bottom graph, the layer is drawn underneath
+  # the heatmap so you can't actually see it but the legend shows, which is the intended
+  # effect. seed ensures all three show up,
+
+  set.seed(1)
+
+  mut.vec <- sample(c("Deletion", "SNP", "Insertional\nelement"), nrow(fcdf), replace = TRUE)
+  
+  # add that column
+  fcdf$mtype <- mut.vec
+  
+  # new color bar labels
+  scale.labels <- c(paste("\u2264", paste0("-", threshold), sep = ""),
+                    "",
+                    0,
+                    "",
+                    paste("\u2265", threshold, sep = ""))
+  
+  # make clean colorbar breaks
+  cbreaks <- c(-threshold,
+               -threshold+(threshold/2),
+               0,
+               threshold-(threshold/2),
+               threshold)
+  
+  # finally, make a graph  
+  plot <- fcdf %>%
+    ggplot(., aes(k12_name, line, fill = ds_log2foldchange_rna, label = stars))+
+    geom_point(aes(color = mtype))+
+    geom_raster()+
+    geom_text()+
+    scale_fill_gradient2(low = "indianred", high = "steelblue", 
+                         name = expression(paste(log[2], "(FC)")),
+                         limits = c(-threshold, threshold),
+                         guide = guide_colorbar(ticks.colour = "black"),
+                         breaks = cbreaks,
+                         labels = scale.labels)+
+    theme(text = element_text(size = 14),
+          axis.text.x = element_text(color = color.vec),
+          axis.text.y = element_text(color = mut.colors),
+          panel.background = element_blank(),
+          axis.ticks = element_blank(),
+          legend.key = element_blank())+
+    labs(x = NULL,
+         y = NULL,
+         title = fig_letter)+
+    facet_wrap(~ graph_label)+
+    scale_x_discrete(labels = x_labs)+
+    scale_color_manual(values = c(del.color, ins.color, snp.color), name = "Mutation type", guide = "none")
+ 
+  return(plot) 
+}
+```
+
+Finally, the genes
+```{r}
+nad <- c("nadC", "nadD", "nadE", "nadK")
+
+names(nad) <- c("na", "nb", "nc", "nd")
+
+nad.x.labs <- nad
+
+pc <- heatmap_function(nad, title = "NAD synthesis", threshold = 3, fig_letter = "C", x_labs = nad.x.labs)
+
+pc
+```
+
+### Panel D
+
+Distribution of PPS scores
+```{r}
+pd <- pps.df %>% 
+  filter(iteration == "real") %>% 
+  mutate(line = factor(line, levels = c(mut.levels))) %>% 
+  ggplot(., aes(line, pps, fill = factor(seqtype, levels = c("rna", "ribo"))))+
+  geom_boxplot(outlier.size = .75)+
+  theme_bw()+
+  theme(text = element_text(size = 14),
+        panel.grid = element_blank(),
+        axis.text.x =  element_text(angle = 45, vjust = 1.1, color = mut.colors, hjust = 1.1),
+        legend.position = c(.5, .96),
+        legend.background = element_blank())+
+  labs(x = NULL,
+       y = "PPS",
+       title = "D")+
+  scale_fill_manual(values = c("grey60", "white"), name = NULL, labels = c("RNA-seq", "Ribo-seq"))+
+  guides(fill = guide_legend(nrow = 1))+
+  scale_y_continuous(limits = c(0, 13), breaks = seq(0, 14, 2))
+
+pd
+```
+
+### Final figure
+
+```{r fig.width = 11, fig.height = 9}
+layout <- "
+AAAABB
+CCDDDD
+"
+
+(ff <- (pa + pb + pc + pd) + plot_layout(design = layout, ncol = 2, heights = c(.6, .4)))
+```
+
+Save it
+```{r}
+write_rds(ff, "../../figures/fig_s8.rds")
+
+ggsave(ff, filename = "../../figures/g_fig_s8.pdf", width = 11, height = 9)
+
+ggsave(ff, filename = "../../figures/g_fig_s8.png", width = 11, height = 9)
+```
+
+```{r}
+sessionInfo()
+```
+

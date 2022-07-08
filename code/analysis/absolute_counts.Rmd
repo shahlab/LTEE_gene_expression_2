@@ -1,0 +1,128 @@
+---
+title: "Absolute counts"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+```{r}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+Load packages and necessary data frames.
+```{r}
+library(tidyverse)
+library(broom)
+library(ggpubr)
+
+# get a vector for only e coli protein coding genes, not insertional elements or tRNAs or ERCCs
+ecbs <- read_csv("../../data_frames/all_data.csv") %>% # read in the combined data frame
+  filter(gene_type == "ECB") %>%                       # these are the protein coding genes
+  pull(target_id) %>%                                  # get them as a vector
+  unique()
+
+# the kallisto results, only need ERCCs and e coli protein genes and select columns
+kdf <- read_csv("../../data_frames/table_s1_read_counts.csv") %>% 
+  filter(target_id %in% ecbs) %>% 
+  select(line, repl, target_id, tpm, seqtype)
+  
+# details of the ERCC controls and how much was added to each sample, their TPMs, etc
+ercc.per.sample <- read_csv("../../data_frames/table_s5_ercc_molecules_per_sample.csv")
+
+# the colony counts per sample
+col.counts <- read_csv("../../data_frames/table_s4_colony_counts.csv")
+
+# read in cell size data for median volumes
+size.df <- read_csv("../../data_frames/table_s3_cell_size.csv") %>% 
+  filter(line != "Ara+6") %>% 
+  mutate(volume = ((pi*(SHAPE.width.mean^2)) / 4)*(SHAPE.length-(SHAPE.width.mean/3)),
+         repl = paste0("rep", repl)) %>% 
+  group_by(line, repl) %>% 
+  summarise(median_volume = median(volume)) %>% 
+  ungroup()
+```   
+
+### Modeling
+
+Examine the relationship between amount of ERCCs added and their TPM in each of the samples. The RNAseq samples appear fine, the riboseq samples are not. Only consider RNAseq going forward. This is simply a plot of that relationship. 
+```{r fig.width = 19, fig.height = 5, warning = FALSE}
+ggplot(ercc.per.sample, aes(molecules_of_seq, tpm, color = repl))+
+  geom_point(show.legend = FALSE)+
+  geom_smooth()+
+  scale_x_log10()+
+  scale_y_log10()+
+  facet_grid(seqtype ~ line)+
+  stat_cor(aes(label = ..r.label..), label.x.npc = .45, label.y.npc = .125, show.legend = FALSE)+
+  labs(x = "Molecules of control sequence added",
+       y = "TPM")+
+  theme(text = element_text(size = 13),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.grid.minor = element_blank(),
+        legend.position = "bottom")
+```
+
+For RNAseq, linearity seems to drop off around 1e5, so we will only use ERCCs with at least 1e5 molecules added and had a non-zero TPM.
+```{r fig.width = 15, fig.height = 6}
+ercc.per.sample %>% 
+  filter(seqtype == "rna") %>% 
+  ggplot(., aes(molecules_of_seq, tpm, color = repl))+
+    geom_point(show.legend = FALSE)+
+    geom_smooth()+
+    scale_x_log10()+
+    scale_y_log10()+
+    facet_wrap(~line, ncol = 7)+
+    stat_cor()+
+    labs(x = "Molecules of control sequence added",
+         y = "TPM")+
+    theme(text = element_text(size = 13),
+          axis.text.x = element_text(angle = 45, hjust = 1),
+          panel.grid.minor = element_blank(),
+          legend.position = "bottom")
+```
+
+Generate the linear models for each sample
+```{r}
+model.df <- ercc.per.sample %>% 
+  filter(tpm > 0 & molecules_of_seq >= 1e5 & seqtype == "rna") %>%          # pick ERCCs matching criteria, RNAseq only
+  nest(-line, -repl) %>%                                                    # nest these columns to a compound data structure
+  mutate(model = map(data, ~ lm(log10(.$molecules_of_seq) ~ log10(.$tpm))), # generate the model
+         tidied = map(model, tidy)) %>%                                     # use broom to recover and tidy the model
+  unnest(tidied) %>%
+  select(repl, line, term, estimate) %>%                                    # only need these columns
+  pivot_wider(names_from = term, values_from = estimate) %>%                # reshape to wider format
+  rename("intercept" = "(Intercept)", "slope" = "log10(.$tpm)")             # rename some columns
+
+model.df
+```
+
+Join the model df to the kallisto results df and use the models to calculate molecules from tpm. First though, the riboseq TPMS must be removed.
+```{r}
+kdf2 <- filter(kdf, seqtype == "rna") %>%                     # only the RNAseq TPMs are needed
+  left_join(., model.df, by = c("line", "repl")) %>%          # join to the models
+  mutate(n_molecules = 10^(intercept + (slope * log10(tpm)))) # calculate number of molecules
+
+head(kdf2)
+```
+
+### CFUs
+
+Calculate the number of molecules per cfu.
+```{r}
+kdf3 <- left_join(kdf2, col.counts, by = c("line", "repl")) %>% 
+  left_join(., size.df, by = c("line", "repl")) %>% 
+  mutate(n_mol_per_cfu = n_molecules / mean_cells_final)
+
+head(kdf3)
+```
+
+Save it
+```{r}
+write_csv(kdf3, "../../data_frames/table_s6_mRNAs_per_cfu.csv")
+```
+
+```{r}
+sessionInfo()
+```

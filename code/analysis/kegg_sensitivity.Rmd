@@ -1,0 +1,132 @@
+---
+title: "KEGG analysis"
+output: 
+  html_document:
+    df_print: paged
+author: "John Favate"
+date: "`r Sys.time()`"
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r warning = FALSE, message = FALSE}
+# Prevent printing of warnings and such in the HTML
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+Read in packages and necessary data
+```{r}
+library(tidyverse)
+library(clusterProfiler)
+
+all.data <- read_csv("../../data_frames/all_data.csv") %>% 
+  filter(gene_type == "ECB")
+```
+
+### KEGG
+
+These are all the fold changes
+```{r}
+fc.df <- all.data %>%
+  select(line, target_id, ds_log2foldchange_rna, deleted)
+```
+
+This reruns the KEGG analysis for each possible value of l2fc for the deleted genes, ranging to -10 to -1.
+```{r}
+kegg.list <- parallel::mclapply(-10:-1, function(x) {
+  # change fc of deleted genes to -10 to -1
+  new.fcs <- fc.df %>%
+    mutate(ds_log2foldchange_rna = ifelse(deleted == TRUE, x, ds_log2foldchange_rna)) %>%
+    filter(!is.na(ds_log2foldchange_rna)) %>%
+    # split to each line
+    split(.$line) %>%
+    map(function(y) {
+      # extract fold change vector
+      fc.df <- y %>% 
+        arrange(desc(ds_log2foldchange_rna))
+      
+      fc.vec <- fc.df$ds_log2foldchange_rna
+      
+      # name it
+      names(fc.vec) <- fc.df$target_id
+      
+      # run kegg
+      gse <- gseKEGG(
+        fc.vec,
+        organism = "ebr",
+        minGSSize = 2,
+        maxGSSize = 1000,
+        pvalueCutoff = 1,
+        eps = 0
+      )
+      
+      # give the results back as a data frame
+      return(as_tibble(gse))
+    }) %>% 
+    # combine each lines dfs
+    bind_rows(.id = "line") %>% 
+    # add a row that says which l2fc value was used
+    mutate(fcval = x)
+}, mc.cores = 10) %>% 
+  bind_rows()
+
+kegg.list
+```
+
+How does the number of significant categories change as a function of the value of fc?
+```{r fig.width = 10, fig.height = 5}
+kegg.list %>% 
+  mutate(direc = factor(sign(enrichmentScore))) %>% 
+  filter(qvalues<=.05) %>% 
+  group_by(line, fcval, direc) %>% 
+  tally() %>% 
+  ggplot(., aes(fcval, n, fill = direc))+
+  geom_col(position = position_dodge(preserve = "single"))+
+  facet_wrap(~line, ncol = 4)+
+  scale_x_continuous(breaks = -10:-1)
+```
+THe number of down categories doesn't change so much, making it more negative seems to eliminate some positive categories, presumably because they then don't look significant if a bunch of -10s show up.
+
+How does the frequency of significance of each category change? This is showing categories that at some point were significant in 4+ lines. 
+```{r fig.width = 10, fig.height = 8}
+kegg.list %>% 
+  filter(qvalues <= .05) %>% 
+  group_by(fcval, ID) %>% 
+  tally() %>% 
+  group_by(ID) %>% 
+  filter(max(n) >=4) %>% 
+  ungroup() %>% 
+  ggplot(., aes(fcval, n))+
+  geom_line()+
+  geom_hline(aes(yintercept = 6), linetype = 5)+
+  facet_wrap(~ID)+
+  scale_y_continuous(breaks = seq(0, 11, 2))+
+  scale_x_continuous(breaks = -11:-1)+
+  theme_bw()+
+  theme(panel.grid.minor = element_blank())
+```
+There are some categories that go from being rarely significant at -10 to frequently significant at -1, these are categories that are drowned out by the -10s
+```{r}
+kegg.list %>% 
+  select(ID, Description) %>% 
+  distinct() %>% 
+  filter(ID %in% c("ebr02010", "ebr01200", "ebr00240", "ebr00220", "ebr00920", "ebr00190"))
+```
+
+### PPS
+
+For PPS, it will simply increase the scores of anything with a deletion, deletions will drown out most of the signal if you look at the "top 10" or something similar. You can simply filter against things with deletions in it if you want to remove the effect of the deletions.
+
+### GO
+
+The expectation is that the same thing will happen with GO, where adding -10 hides some upregulated categories and adds some downregulated categories. After having run with and without deletions, it's still easy to get to categories we eventually found to be important, like NAD biosynthesis, regardless of what the deletions fold change is set to.
+
+```{r}
+sessionInfo()
+```
