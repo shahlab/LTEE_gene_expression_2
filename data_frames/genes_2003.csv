@@ -1,0 +1,60 @@
+gene,func_group,Ara+1,Ara-1
+alr,Amino acid biosynthesis and metabolism,-1.94,-1.97
+dadA,Amino acid biosynthesis and metabolism,-1.63,-2.15
+pheA,Amino acid biosynthesis and metabolism,-1.69,-1.49
+thrC,Amino acid biosynthesis and metabolism,-2.35,-2.40
+hemA,"Biosynthesis of cofactors, prosthetic groups, and carriers",-1.77,-1.65
+menD,"Biosynthesis of cofactors, prosthetic groups, and carriers",-1.41,-1.70
+malP,Carbon compound catabolism,-2.37,-2.03
+malQ,Carbon compound catabolism,-3.04,-2.58
+rbsK,Carbon compound catabolism,-2.14,-1.92
+flaG,"Cell processes (incl. adaptation, protection)",-9.44,-11.74
+flgB,"Cell processes (incl. adaptation, protection)",-21.48,-16.36
+flgC,"Cell processes (incl. adaptation, protection)",-7.37,-4.74
+flgD,"Cell processes (incl. adaptation, protection)",-11.35,-6.78
+flgE,"Cell processes (incl. adaptation, protection)",-16.40,-13.40
+flgF,"Cell processes (incl. adaptation, protection)",-4.38,-2.82
+flgG,"Cell processes (incl. adaptation, protection)",-11.29,-9.61
+flgK,"Cell processes (incl. adaptation, protection)",-12.71,-8.36
+flgL,"Cell processes (incl. adaptation, protection)",-6.43,-6.34
+trg,"Cell processes (incl. adaptation, protection)",-2.83,-2.35
+flhA,Cell structure,-1.55,-1.74
+b1009,Central intermediary metabolism,-1.08,-1.22
+ccmC,Energy metabolism,1.31,1.16
+cdsA,Fatty acid and phospholipid metabolism,-1.54,-1.44
+ybaC,Fatty acid and phospholipid metabolism,-1.56,-2.89
+yaeT,"Hypothetical, unclassified, unknown",-1.50,-1.61
+yafU,"Hypothetical, unclassified, unknown",-1.62,-1.42
+ybcU,"Hypothetical, unclassified, unknown",-7.00,-3.59
+b0762,"Hypothetical, unclassified, unknown",-1.72,-1.58
+b1044,"Hypothetical, unclassified, unknown",-2.24,-1.72
+b1490,"Hypothetical, unclassified, unknown",-3.09,-1.54
+b2445,"Hypothetical, unclassified, unknown",1.26,1.28
+b2462,"Hypothetical, unclassified, unknown",1.29,1.24
+b2772,"Hypothetical, unclassified, unknown",1.29,1.31
+b2809,"Hypothetical, unclassified, unknown",-1.69,-1.21
+syd,"Hypothetical, unclassified, unknown",1.26,1.28
+yaeJ,"Hypothetical, unclassified, unknown",-1.22,-1.39
+ydfC,"Hypothetical, unclassified, unknown",1.20,1.28
+ydfE,"Hypothetical, unclassified, unknown",1.20,1.25
+yjgF,"Hypothetical, unclassified, unknown",1.33,1.26
+yjiD,"Hypothetical, unclassified, unknown",1.25,1.19
+yjjY,"Hypothetical, unclassified, unknown",1.24,1.23
+ykfB,"Hypothetical, unclassified, unknown",-1.91,-1.65
+yohH,"Hypothetical, unclassified, unknown",1.29,1.26
+nrdA,Nucleotide biosynthesis and metabolism,1.64,1.33
+yliJ,Putative enzymes,-3.46,-3.10
+b1168,Putative enzymes,-1.57,-1.43
+ynbD,Putative enzymes,-1.40,-1.89
+yqhC,Putative enzymes,-2.18,-2.14
+yhcJ,Putative enzymes,-1.57,-1.76
+yidJ,Putative enzymes,-2.32,-1.82
+yjcP,Putative enzymes,-1.64,-1.34
+hsdR,"Transcription, RNA processing, and degradation",-1.91,-1.52
+rpoD,"Transcription, RNA processing, and degradation",-1.85,-2.28
+pepD,"Translation, post-translational modification",-2.98,-2.52
+malK,Transport and binding proteins,-2.04,-1.90
+mgtA,Transport and binding proteins,-2.04,-2.14
+rbsB,Transport and binding proteins,-3.80,-2.53
+rbsC,Transport and binding proteins,-2.96,-2.08
+rbsD,Transport and binding proteins,-8.35,-7.07

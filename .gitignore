@@ -1,0 +1,25 @@
+.Rproj.user
+*.Rproj
+.Rhistory
+.RData
+.Ruserdata
+*.feather
+*.fq.gz
+*.txt
+alignemnt/*/*/*/*
+alignment/*/*/*
+!alignment/*/*/.gitkeep
+micro_images
+LTEE-cell-size-shape
+*.png
+*.pdf
+*.rds
+# don't add all the data
+data_frames/*
+# only add data files that are necessary, the rest are
+# provided as a zip file in the supplement
+!data_frames/table_s12_mutations.csv
+!data_frames/genes_2003.csv
+!data_frames/table_s3_cell_size.csv
+!data_frames/table_s4_colony_counts.csv
+!data_frames/table_s5_ercc_molecules_per_sample.csv
