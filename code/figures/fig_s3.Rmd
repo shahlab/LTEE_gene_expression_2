@@ -296,87 +296,24 @@ pb <- bdf2 %>%
 pb
 ```
 
-### Panel C
-
-TPM of deleted genes. Within each, line what was the ancestral TPM of the deleted genes?
-```{r}
-# ancestral TPM of all genes
-anc.tpms <- all.data %>% 
-  select(target_id, anc_mean_tpm_rna) %>% 
-  distinct() %>% 
-  mutate(xlabz = "Ancestor\nall genes")
-
-# Ancestral TPM of genes deleted in each line
-evo.tpms.of.del.genes <- all.data %>% 
-  filter(deleted == TRUE) %>% 
-  select(line, anc_mean_tpm_rna) %>% 
-  group_by(line) %>% 
-  mutate(xlabz = paste0(line, "\n", n())) %>% 
-  ungroup()
-
-# line order based on median
-line.order.c <- evo.tpms.of.del.genes %>% 
-  group_by(xlabz) %>% 
-  summarise(med = median(log10(anc_mean_tpm_rna))) %>% 
-  arrange(med) %>% 
-  pull(xlabz)
-
-line.order.c2 <- c("Ancestor\nall genes", line.order.c)
-
-# combine them
-pc.df <- bind_rows(anc.tpms, evo.tpms.of.del.genes) %>% 
-  mutate(old = xlabz == "Ancestor\nall genes",
-         xlabz = factor(xlabz, line.order.c2))
-
-# ancestral median line
-anc.med <- median(anc.tpms$anc_mean_tpm_rna)
-
-# axis colors
-c.lines <- evo.tpms.of.del.genes %>% 
-  group_by(line) %>% 
-  summarise(med = median(log10(anc_mean_tpm_rna))) %>% 
-  arrange(med) %>% 
-  pull(line)
-
-pc.colors <- sapply(c("Anc", c.lines), function(x){
-  if (x %in% mut.lines){
-    return("firebrick")
-  } else {
-    return("black")
-  }
-})
-
-# the ancestral median needs to be hard coded into this grraph so it can save as
-# a rds file
-pc <- pc.df %>% 
-  ggplot(., aes(xlabz, anc_mean_tpm_rna, fill = old))+
-  geom_boxplot(outlier.size = 1)+
-  geom_hline(aes(yintercept = 2.172789), linetype = 5)+
-  scale_y_log10(labels = scales::trans_format("log10", scales::math_format(10^.x)))+
-  theme_bw()+
-  theme(panel.background = element_blank(),
-        text = element_text(size = 14),
-        panel.grid = element_blank(),
-        axis.text.x = element_text(color = pc.colors))+
-  scale_fill_manual(values = c("white", "grey70"), guide = "none")+
-  stat_compare_means(ref.group = "Ancestor\nall genes", aes(label = ..p.signif..))+
-  labs(x = NULL, y = "TPM", title = "C")
-
-pc
-```
 ### Final figure
 
-```{r fig.width = 11, fig.height = 11}
-ff <- (pa / pb / pc) + plot_layout(heights = c(.3, .4, .3))
+```{r fig.width = 11, fig.height = 7}
+ff <- (pa / pb) + plot_layout(heights = c(.4, .6))
 
 ff
 ```
 
 Save it in various formats
 ```{r}
-ggsave(ff, filename = "../../figures/fig_s3.png", width = 11, height = 8)
+ggsave(ff, filename = "../../figures/fig_s3.png", width = 11, height = 7)
 
-ggsave(ff, filename = "../../figures/fig_s3.pdf", device = cairo_pdf, width = 11, height = 11)
+ggsave(ff, filename = "../../figures/fig_s3.pdf", device = cairo_pdf, width = 11, height = 7)
 
 write_rds(ff, "../../figures/fig_s3.rds")
 ```
+
+```{r}
+sessionInfo()
+```
+

@@ -177,16 +177,16 @@ pc
 
 ### Final figure
 
-```{r fig.width = 11, fig.height = 8}
+```{r fig.width = 11, fig.height = 9}
 top <- (pa | pb | plot_spacer()) + plot_layout(widths = c(.33, .33, .33))
 
 (ff <- (top / pc) + plot_layout(heights = c(.55, .45)))
 ``` 
 
 ```{r}
-ggsave(ff, filename = "../../figures/fig_s4.png", width = 11, height = 8)
+ggsave(ff, filename = "../../figures/fig_s4.png", width = 11, height = 9)
 
-ggsave(ff, filename = "../../figures/fig_s4.pdf", device = cairo_pdf, width = 11, height = 8)
+ggsave(ff, filename = "../../figures/fig_s4.pdf", device = cairo_pdf, width = 11, height = 9)
 
 write_rds(ff, "../../figures/fig_s4.rds")
 ```

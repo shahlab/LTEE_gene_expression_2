@@ -605,7 +605,7 @@ connect.df <- data.frame(
 The expected total number of genes one would find in x number of lines, 4131 is number of ECB genes considered. 
 ```{r}
 exp <- sapply(1:11, function(x) {
-  # total number of down genes expeceted in some number of lines and up x
+  # total number of down genes expected in some number of lines and up x
   find.down <- (p.down * 4131)[x:11] %>% sum()
   
   find.up <- (p.up * 4131)[x:11] %>% sum()

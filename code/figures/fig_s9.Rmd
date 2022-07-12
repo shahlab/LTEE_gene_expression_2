@@ -355,3 +355,8 @@ ggsave(ff, filename = "../../figures/fig_s9.png", width = 11, height = 15)
 
 write_rds(ff, file = "../../figures/fig_s9.rds")
 ```
+
+```{r}
+sessionInfo()
+```
+

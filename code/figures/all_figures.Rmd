@@ -33,7 +33,8 @@ names(rlocs) <- stringr::str_remove(rlocs, "../../figures/") %>%
 ```{r fig.width = 11, fig.height = 8.5}
 read_rds(rlocs[names(rlocs) == "fig_s1"])
 ```
-Figure S1: **(A)** The average number of reads aligned per gene by Kallisto for each sample. The color scheme remains the same for panels B and C. **(B)** The periodicity of the ribo-seq datasets determined using a fast Fourier transform (see methods). **(C)** Distributions of reads per gene in each sample. **(D)** Correlations between the replicates based on rounded counts or TPMs.\newpage
+Figure S1: **(A)** The average number of reads aligned per gene by Kallisto for each sample. The color scheme remains the same in panels B and D. **(B)** Distributions of reads per gene in each sample. **(C)** Correlations between the replicates based on rounded counts or TPMs. 
+**(D)** The periodicity of the ribo-seq datasets determined using a fast Fourier transform (see Methods M12). \newpage
 
 ### Figure 1
 
@@ -41,23 +42,23 @@ Figure S1: **(A)** The average number of reads aligned per gene by Kallisto for 
 read_rds(rlocs[names(rlocs) == "fig_1"])
 ```
 
-Figure 1: **(A)** Schematic of experimental setup. **(B)** Pairwise Pearsons's correlations based on $log_{10}(TPM)$ (where TPM is the mean from replicates) separated by comparisons between evolved lines or from ancestors to evolved lines. P-values indicate the results of a Kolmogorov-Smirnov (KS) test. For differentially expressed genes (DESeq2 q $\leq$ 0.01), evolved line were compared using the union of the significant genes from each line. When comparisons were between an evolved line and an ancestor, the significant genes from that evolved line were used. **(C)** Pairwise Spearman's correlations based on fold-changes from all genes (All), and the union of the significant genes between two evolved lines. **(D)** Fold-changes for genes which were significant in at least one line are ordered left to right by increasing mean fold-change across the evolved lines. Genes containing deletions were not assigned a fold-change and are represented as grey spaces. Lines with a mutator phenotype are in red. **(E)** The upper panel shows the number of genes (y-axis) that were both statistically significant and had a fold-change in the same direction in a particular number of lines (x-axis). The bottom panel shows the expected (dashed) and observed (solid) probability of observing a particular result. P-values are the result of a KS test between the observed and expected distributions. \newpage
+Figure 1: **(A)** Schematic of experimental setup. **(B)** Pairwise Pearsons's correlations based on $log_{10}(TPM)$ (where TPM is the mean from replicates) separated by comparisons between evolved lines or from ancestors to evolved lines. P-values indicate the results of a Kolmogorov-Smirnov (KS) test. For differentially expressed genes (DESeq2 q $\leq$ 0.01), evolved line were compared using the union of the significant genes from each line. When comparisons were between an evolved line and an ancestor, the significant genes from that evolved line were used. **(C)** Pairwise Spearman's correlations based on fold-changes from all genes, and the union of the significant genes between two evolved lines. **(D)** Fold-changes for genes which were significant in at least one line are ordered left to right by increasing mean fold-change across the evolved lines. Genes containing deletions were not assigned a fold-change and are represented as grey spaces. Lines with a mutator phenotype are in red. **(E)** The upper panel shows the number of genes (y-axis) that were both statistically significant and had a fold-change in the same direction in a particular number of lines (x-axis). The bottom panel shows the expected (dashed) and observed (solid) probability of observing a particular result. P-values are the result of a KS test between the observed and expected distributions. \newpage
 
 ### Figure S2
 
-```{r fig.width = 11, fig.height = 8}
+```{r fig.width = 11, fig.height = 10.5}
 read_rds(rlocs[names(rlocs) == "fig_s2"])
 ```
 
-Figure S2: **(A)** Distributions of all DESeq2 fold-changes in each line. Lines with a mutator phenotype are in red. **(B)** The number of statistically significant (DESeq2 q $\leq$ 0.01) genes in each line. **(C)** Upper panel shows the probabilities of observing a gene that was statistically significant and altered in the same direction in a given number of lines (x-axis).The solid lines represent mean probabilities derived from randomizing the gene names about their fold-changes and p-values one million times and the dashed lines represent the probabilities calculated using the SINIB method as shown in Fig 1E. P-values show the result of a KS test comparing the randomized to the SINIB distributions. The lower panel shows the number of genes expected to be statistically significant and altered in the same direction in a given number of lines (x-axis) based on the above probabilities. **(D)** Distributions of fold-changes for the statistically significant genes in each line. The number of transcripts in each box is indicated. Asterisks indicate the results of a Kolmogorov-Smirnov test comparing distributions of the magnitudes of positive and negative fold-changes in each line NS: p > 0.05, \*: p $\leq$ 0.05, \*\*: p $\leq$ 0.01, \*\*\*: p $\leq$ 0.001 \*\*\*\*: p $\leq$ 0.0001. **(E)** PCA based on fold-changes. In this case, genes with some form of deletion (complete or indel) are assigned a fold-change of -10 to indicate severe downregulation because they are either completely absent from the genome or not expected to produce functional proteins. The top 10 genes that contribute to PC1 and PC2 are listed to the right. **(F)** \newpage
+Figure S2: **(A)** Distributions of all DESeq2 fold-changes in each line. Lines with a mutator phenotype are in red. **(B)** The number of statistically significant (DESeq2 q $\leq$ 0.01) genes in each line. **(C)** Upper panel shows the probabilities of observing a gene that was statistically significant and altered in the same direction in a given number of lines (x-axis).The solid lines represent mean probabilities derived from randomizing the gene names about their fold-changes and p-values one million times and the dashed lines represent the probabilities calculated using the SINIB method as shown in Fig 1E. P-values show the result of a KS test comparing the randomized to the SINIB distributions. The lower panel shows the number of genes expected to be statistically significant and altered in the same direction in a given number of lines (x-axis) based on the above probabilities. **(D)** Distributions of fold-changes for the statistically significant genes in each line. The number of transcripts in each box is indicated. Asterisks indicate the results of a Kolmogorov-Smirnov test comparing distributions of the magnitudes of positive and negative fold-changes in each line NS: p > 0.05, \*: p $\leq$ 0.05, \*\*: p $\leq$ 0.01, \*\*\*: p $\leq$ 0.001 \*\*\*\*: p $\leq$ 0.0001. **(E)** PCA based on fold-changes. In this case, genes with some form of deletion (complete or indel) are assigned a fold-change of -10 to indicate severe downregulation because they are either completely absent from the genome or not expected to produce functional proteins. **(F)** The top 10 genes contributing to variation in each principle component, grey spaces represent deletions which were encoded as having a $log_2$(fold-change) = -10. **(G)** The genes and descriptions retrieved from EcoCyc are displayed below. \newpage
 
 ### Figure S3
 
-```{r fig.width = 11, fig.height = 11}
+```{r fig.width = 11, fig.height = 7}
 read_rds(rlocs[names(rlocs) == "fig_s3"])
 ```
 
-Figure S3: **(A)** The direction of expression changes from genes identified as differentially expressed from the Cooper 2003 study and the direction of changes for those genes in our dataset. While the two datasets share a color scale for fold-change, the data underlying the Cooper 2003 study was generated using a microarray whereas ours in RNAseq based. **(B)** Relationship between ancestral TPM (mean of all 4 ancestral samples) and fold-change in the indicated evolved line. The red points and correlations represent genes that were statistically significant (DESeq2 q $\leq$ 0.01) in each line. The black points are the remaining genes, but the black correlation is based on all (both significant and not) genes.**(C)** Genes deleted in each evolved line had low TPM in the ancestor. The ancestor box represents the TPMs for all genes. Each evolved line box represents the ancestral TPM for genes which were deleted in that line. The number of genes deleted in each line is listed on the x-axis. \newpage
+Figure S3: **(A)** The direction of expression changes from genes identified as differentially expressed from the Cooper 2003 study and the direction of changes for those genes in our dataset. While the two datasets share a color scale for fold-change, the data underlying the Cooper 2003 study was generated using a microarray whereas ours in RNAseq based. **(B)** Relationship between ancestral TPM (mean of all 4 ancestral samples) and fold-change in the indicated evolved line. The red points and correlations represent genes that were statistically significant (DESeq2 q $\leq$ 0.01) in each line. The black points are the remaining genes, but the black correlation is based on all (both significant and not) genes.
 
 ### Figure 2
 
@@ -69,7 +70,7 @@ Figure 2: **(A)** Volume distributions (femtoliters, fL) determined by phase-con
 
 ### Figure S4
 
-```{r fig.width = 11, fig.height = 8}
+```{r fig.width = 11, fig.height = 9}
 read_rds(rlocs[names(rlocs) == "fig_s4"])
 ```
 
@@ -114,7 +115,7 @@ Figure 4: **(A)** The top 10 KEGG pathways that were statistically significant (
 read_rds(rlocs[names(rlocs) == "fig_5"])
 ```
 
-Figure 5: **(A-B)** RNA-seq fold-changes and DESeq2 q-values (blank: q > 0.05, \*: q $\leq$ 0.05, \*\*: q $\leq$ 0.01, \*\*\*: q $\leq$ 0.001 \*\*\*\*: q $\leq$ 0.0001) for genes involved in various pathways are shown. In each plot, genes along the x-axis are colored based on operon membership and coloring from one plot is unrelated to the others. Transcription factors that regulate the other genes in the plot are underlined and the location and type of mutation to them are shown beneath each heatmap.\newpage
+Figure 5: **(A-B)** RNA-seq fold-changes and DESeq2 q-values (blank: q > 0.05, \*: q $\leq$ 0.05, \*\*: q $\leq$ 0.01, \*\*\*: q $\leq$ 0.001 \*\*\*\*: q $\leq$ 0.0001) for genes involved in various pathways are shown. In each plot, genes along the x-axis are colored based on operon membership and coloring from one plot is unrelated to the others. Transcription factors that regulate the other genes in a plot are underlined and the location and type of mutation to them are shown beneath each heatmap.\newpage
 
 ### Figure S7
 

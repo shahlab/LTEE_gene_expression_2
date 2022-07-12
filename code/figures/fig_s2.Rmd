@@ -27,29 +27,38 @@ library(broom)
 library(ggrepel)
 library(scales)
 library(ggpubr)
-library(gridExtra)
 library(grid)
+library(gridExtra)
+library(gtable)
 
 all.data <- read_csv("../../data_frames/all_data.csv") %>%
-  filter(gene_type == "ECB")
+  filter(gene_type == "ECB")%>%
+  mutate(line = str_replace(line, "Ara-", "A-"),
+         line = str_replace(line, "Ara\\+", "A+"))
 
 # get the e coli proteins only
 ecb.genes <- unique(all.data$target_id)
 
 # Removes ERCC and tRNA genes from the data
 kdf <- read_csv("../../data_frames/table_s1_read_counts.csv") %>%
-  filter(target_id %in% ecb.genes)
+  filter(target_id %in% ecb.genes)%>%
+  mutate(line = str_replace(line, "Ara-", "A-"),
+         line = str_replace(line, "Ara\\+", "A+"))
 
 mut.levels <- all.data %>% 
   select(line, mutator) %>% 
   distinct() %>% 
   arrange(mutator, line) %>% 
-  pull(line)
+  pull(line) %>% 
+  str_replace(., "Ara-", "A-") %>% 
+  str_replace("Ara\\+", "A+")
 
 # deseq results
 ddf <- read_csv("../../data_frames/table_s2_fold_changes.csv") %>%
   filter(seqtype == "rna") %>%
-  mutate(line = factor(line, levels = mut.levels))
+  mutate(line = str_replace(line, "Ara-", "A-"),
+         line = str_replace(line, "Ara\\+", "A+"),
+         line = factor(line, levels = mut.levels))
 ```
 
 These are the mutator lines.
@@ -196,7 +205,7 @@ pc.top <- pc.df1 %>%
   theme(
     text = element_text(size = 14),
     panel.grid = element_blank(),
-    legend.position = c(.28, .25),
+    legend.position = c(.32, .26),
     legend.text = element_text(size = 9),
     legend.key = element_blank(),
     legend.background = element_blank(),
@@ -248,9 +257,10 @@ pc.big <- pc.df2 %>%
   theme(text = element_text(size = 14),
         panel.grid = element_blank(),
         legend.background = element_blank(),
-        legend.position = c(.72, .29),
-        legend.text = element_text(size = 9),
-        legend.key.size = unit(2, "mm"))+
+        legend.position = c(.7, .28),
+        legend.text = element_text(margin = margin(l = .001, unit = "mm"), size = 8.5),
+        legend.key.size = unit(1.5, "mm"),
+        legend.spacing.y = unit(1, 'mm'))+
   labs(x = "Number of lines",
        y = "Number of genes")
 
@@ -326,7 +336,7 @@ pd <- ddf %>%
   mutate(direc = ifelse(log2FoldChange > 0, "Upregulated", "Downregulated")) %>% 
   ggplot(., aes(line, abs(log2FoldChange), fill = direc))+
   geom_boxplot(outlier.size = .5)+
-  geom_text(inherit.aes = FALSE, data = fc.count.df, aes(x = line, y = -.1, color = direc, label = n), position = position_dodge(width = .85), size = 3.5)+
+  geom_text(inherit.aes = FALSE, data = fc.count.df, aes(x = line, y = -.1, color = direc, label = n), position = position_dodge(width = .85), size = 3.4)+
   scale_fill_manual(name = NULL, values = c("indianred", "steelblue"))+
   scale_color_manual(name = NULL, values = c("indianred", "steelblue"), guide = "none")+
   theme_bw()+
@@ -360,7 +370,7 @@ good.genes <- all.data %>%
   filter(n != 11) %>% 
   pull(target_id)
 
-pca.input <- all.data %>% 
+pca.input <- all.data %>%
   select(line, target_id, ds_log2foldchange_rna, deleted) %>%
   filter(target_id %in% good.genes) %>% 
   mutate(ds_log2foldchange_rna = ifelse(deleted == TRUE, -10, ds_log2foldchange_rna)) %>% 
@@ -484,6 +494,10 @@ scale.labels <- c(paste("\u2264", paste0("-", threshold), sep = ""),
 ```
 
 ```{r}
+names.df <- all.data %>% 
+  select(target_id, rel_name) %>% 
+  distinct()
+
 hm.df <- ddf %>%
   filter(target_id %in% c(top.10.pc1, top.10.pc2)) %>%
   mutate(
@@ -495,14 +509,16 @@ hm.df <- ddf %>%
       log2FoldChange > 3 ~ 3,
       is.na(log2FoldChange) | TRUE ~ log2FoldChange
     )
-  )
+  ) %>% 
+  select(line, target_id, newfc, padj, pc, stars) %>% 
+  left_join(names.df)
 ```
 
 ```{r fig.width = 4, fig.height = 4}
 pf <- hm.df %>%
   split(.$pc) %>%
   map(function(x) {
-    ggplot(x, aes(line, target_id, fill = newfc, label = stars)) +
+    ggplot(x, aes(line, rel_name, fill = newfc, label = stars)) +
       geom_raster() +
       scale_fill_gradientn(
         colors = c("indianred", "white", "steelblue"),
@@ -513,7 +529,7 @@ pf <- hm.df %>%
         limits = c(-3, 3)
       ) +
       geom_text() +
-      facet_wrap( ~ pc, ncol = 1, scales = "free") +
+      facet_wrap( ~ pc, ncol = 1, scales = "free", strip.position = "right") +
       theme_bw() +
       theme(
         axis.text.x = element_text(angle = 45, hjust = 1, color = mut.colors.a),
@@ -526,61 +542,92 @@ pf <- hm.df %>%
 pf.top <- pf$PC1 + theme(axis.text.x = element_blank(),
                          axis.ticks.x = element_blank())+ labs(title = "F")
 
-pf.bottom <- pf$PC2 
+pf.bottom <- pf$PC2 + guides(fill = "none")
 
 pf.full <- (pf.top / pf.bottom) + plot_layout(guides = "collect")
 
 pf.full
 ```
 
-```{r fig.width = 11/3, fig.height = 3}
+### Panel G
+
+The table underneath to show the gene names and what they do
+```{r fig.width = 11, fig.height = 3}
+str_clean_func <- function(x){
+  x %>% 
+    str_remove_all("\\&") %>% 
+    str_remove_all("\\;") %>% 
+    str_remove_all("\\<sup\\>") %>% 
+    str_remove_all("\\<\\/sup\\>")
+}
+
+ttt <- ttheme_default(core=list(fg_params=list(hjust=0, x=.01, cex = .9)),
+                      rowhead=list(fg_params=list(hjust=0, x=0)))
+
+table.title <- textGrob("G",gp=gpar(fontsize=17))
+
 t1 <- all.data %>%
   filter(target_id %in% c(top.10.pc1)) %>% 
-  select(target_id, rel_name) %>% 
+  select(target_id, rel_name, rel_product) %>% 
   unique() %>% 
-  mutate(target_id = factor(target_id, levels = top.10.pc1)) %>% 
+  mutate(target_id = factor(target_id, levels = c(top.10.pc1))) %>% 
   arrange(target_id) %>% 
   select(-target_id) %>% 
-  rename("PC1 genes" = "rel_name") %>% 
-  tableGrob(theme = ttheme_minimal(), rows = NULL)
+  rename("PC1 genes" = "rel_name", "Product" = "rel_product") %>% 
+  mutate(Product = str_clean_func(Product)) %>% 
+  tableGrob(theme = ttt, rows = NULL)
+
+t1 <- gtable_add_rows(
+  t1, heights = grobHeight(table.title) + unit(0.5,"line"), pos = 0
+)
+
+t1 <- gtable_add_grob(t1,
+                      list(table.title),
+                      t = 1,
+                      l = 1)
+
+blank <- textGrob(" ",gp=gpar(fontsize=17))
 
 t2 <- all.data %>%
   filter(target_id %in% c(top.10.pc2)) %>% 
-  select(target_id, rel_name) %>% 
+  select(target_id, rel_name, rel_product) %>% 
   unique() %>% 
-  mutate(target_id = factor(target_id, levels = top.10.pc2)) %>% 
+  mutate(target_id = factor(target_id, levels = c(top.10.pc2))) %>% 
   arrange(target_id) %>% 
   select(-target_id) %>% 
-  rename("PC2 genes" = "rel_name") %>% 
-  tableGrob(theme = ttheme_minimal(), rows = NULL)
+  rename("PC2 genes" = "rel_name", "Product" = "rel_product") %>% 
+  mutate(Product = str_clean_func(Product)) %>% 
+  tableGrob(theme = ttt, rows = NULL)
+
+t2 <- gtable_add_rows(
+  t2, heights = grobHeight(blank) + unit(0.5,"line"), pos = 0
+)
+
+t2 <- gtable_add_grob(t2,
+                      list(blank),
+                      t = 1,
+                      l = 1)
 ```
 
 ### Final figure 
 
-```{r fig.width = 11, fig.height = 8}
+```{r fig.width = 11, fig.height = 10.5}
 top <- (pa | pb | pc.full)
 
-bottom <- (pd | pe | t1 | t2) + plot_layout(widths = c(.35, .35, .15, .15))
+middle <- (pd | pe | pf.full) + plot_layout(widths = c(.38, .32, .3))
 
-(ff <- top / bottom)
-```
+bottom <- (plot_spacer() | t1 | plot_spacer() | t2) + plot_layout(widths = c(.01, .4, .2, .4))
 
-Alternatively
-```{r fig.width = 11, fig.height = 8}
-top <- (pa | pb | pc.full)
-
-bottom <- (pd | pe | pf.full) + plot_layout(widths = c(.38, .32, .3))
-
-(ff <- top / bottom)
+(ff <- (top / middle / bottom) + plot_layout(heights = c(.325, .325, .34)))
 ```
 
 Save it
 ```{r}
 write_rds(ff, "../../figures/fig_s2.rds")
 
-ggsave(ff, filename = "../../figures/fig_s2.pdf", width = 11, height = 8)
+ggsave(ff, filename = "../../figures/fig_s2.pdf", width = 11, height = 10.5)
 
-ggsave(ff, filename = "../../figures/fig_s2.png", width = 11, height = 8)
+ggsave(ff, filename = "../../figures/fig_s2.png", width = 11, height = 10.5)
 ```
 
 ```{r}

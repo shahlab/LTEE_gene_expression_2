@@ -79,37 +79,12 @@ pa <- ggplot(rpg, aes(line, mean_reads_per_gene, fill = sample))+
 pa
 ```
 
+
 ### Panel B
-
-```{r fig.width = 10, fig.height = 3.5}
-pb <- nt.df %>%
-  filter(seqtype == "ribo") %>% 
-  unite("sample", seqtype, rep, sep = "_") %>% 
-  group_by(sample, line) %>% 
-  mutate(spec = scales::rescale(spec)) %>% 
-  ggplot(., aes(period, spec, color = sample))+
-  geom_line(size = 1)+
-  facet_wrap(~ line, ncol = 7)+
-  scale_color_manual(values = c("#FDBF6F", "#FF7F00"), labels = c("Ribo-seq 1", "Ribo-seq 2", "RNA-seq 1", "RNA-seq 2"), name = NULL, guide = "none")+
-  theme_bw()+
-  theme(legend.position = c(.04, .88), 
-        panel.grid = element_blank(),
-        text = element_text(size = 14),
-        legend.background = element_blank())+
-  scale_y_continuous(limits = c(0, 1), breaks = c(0, .5, 1))+
-  labs(x = "Period",
-       y = "Normalized signal strength",
-       title = "B")+
-  scale_x_continuous(breaks = c(2,3,4))
-
-pb
-```
-
-### Panel C
 
 Distributions of reads per gene
 ```{r fig.width = 9, fig.height = 3.5}
-pc <- kdf %>% 
+pb <- kdf %>% 
   ggplot(aes(line, est_counts, fill = sample))+
   geom_boxplot(outlier.size = .5)+
   scale_y_log10(labels = label_number_si())+
@@ -125,16 +100,16 @@ pc <- kdf %>%
         strip.background = element_rect(fill = "grey90", color = NA))+
   labs(y = expression(paste(log[10], "(read counts)")),
        x = NULL,
-       title = "C")
+       title = "B")
 
-pc
+pb
 ```
 
-### Panel D
+### Panel C
 
 Correlations for replicates based on counts/TPMs. Make the correlations df
 ```{r}
-ddf <-
+cdf <-
   lapply(c("TPM" = "tpm", "Counts" = "est_counts"), function(x) {
     kdf %>%
       select(line, seqtype, repl, target_id, all_of(x)) %>%
@@ -154,11 +129,11 @@ ddf <-
   }) %>%
   bind_rows(.id = "feature")
 
-paste("min cor =", min(ddf$value), "max cor =", max(ddf$value))
+paste("min cor =", min(cdf$value), "max cor =", max(cdf$value))
 ```
 
 ```{r}
-pd <- ddf %>% 
+pc <- cdf %>% 
   mutate(seqtype = factor(seqtype, levels = c("RNA-seq", "Ribo-seq"))) %>% 
   ggplot(., aes(feature, value, fill = seqtype))+
   geom_boxplot(outlier.size = .1)+
@@ -169,9 +144,35 @@ pd <- ddf %>%
         legend.background = element_blank())+
   labs(y = expression(paste("R of ", log[10], "(feature)")),
        x = NULL,
-       title = "D")+
+       title = "C")+
   scale_fill_manual(values = c("cornflowerblue", "orange"), name = NULL)+
   scale_y_continuous(limits = c(.9, 1))
+
+pc
+```
+
+### Panel D
+
+```{r fig.width = 10, fig.height = 3.5}
+pd <- nt.df %>%
+  filter(seqtype == "ribo") %>% 
+  unite("sample", seqtype, rep, sep = "_") %>% 
+  group_by(sample, line) %>% 
+  mutate(spec = scales::rescale(spec)) %>% 
+  ggplot(., aes(period, spec, color = sample))+
+  geom_line(size = 1)+
+  facet_wrap(~ line, ncol = 7)+
+  scale_color_manual(values = c("#FDBF6F", "#FF7F00"), labels = c("Ribo-seq 1", "Ribo-seq 2", "RNA-seq 1", "RNA-seq 2"), name = NULL, guide = "none")+
+  theme_bw()+
+  theme(legend.position = c(.04, .88), 
+        panel.grid = element_blank(),
+        text = element_text(size = 14),
+        legend.background = element_blank())+
+  scale_y_continuous(limits = c(0, 1), breaks = c(0, .5, 1))+
+  labs(x = "Period",
+       y = "Normalized signal strength",
+       title = "D")+
+  scale_x_continuous(breaks = c(2,3,4))
 
 pd
 ```
@@ -179,7 +180,15 @@ pd
 ### Final figure
 
 ```{r fig.width = 11, fig.height = 8.5}
-(ff <- (pa / pb / ((pc | pd) + plot_layout(widths = c(.88, .12)))))
+top <- pa
+
+middle <- (pb | pc) + plot_layout(widths = c(.88, .12))
+  
+bottom <- pd
+
+ff <- top / middle / bottom
+
+ff
 ```
 
 Save as a pdf and png
