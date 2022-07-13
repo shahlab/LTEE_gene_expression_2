@@ -15,23 +15,9 @@ line.dfs <- ddf %>%
   select(line, target_id, log2FoldChange, padj) %>%
   split(.$line)
 
-# these genes are to be removed, they are genes that are counting towards up and
-# down, i.e. those that are up in 4 and down in 4, etc
-double.genes <- ddf %>%
-  filter(padj <= .01) %>%
-  mutate(direc = ifelse(log2FoldChange > 0, "up", "down")) %>%
-  group_by(target_id, direc) %>%
-  tally() %>%
-  ungroup() %>%
-  group_by(target_id) %>%
-  tally() %>%
-  arrange(desc(n)) %>%
-  filter(n > 1) %>%
-  pull(target_id)
-
 # how many genes were significant in each line, in each direction?
 obs.sig.counts <- ddf %>%
-  filter(padj <= .01 & !(target_id %in% double.genes)) %>%
+  filter(padj <= .01) %>%
   mutate(direc = ifelse(log2FoldChange > 0, "up", "down")) %>%
   group_by(target_id, direc) %>%
   tally() %>%
