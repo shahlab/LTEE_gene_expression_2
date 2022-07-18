@@ -279,7 +279,7 @@ Then plot
 pb <- bdf2 %>%
   ggplot(., aes(anc_tpm, l2fc, color = dtype))+
   geom_point(size = .5, aes(alpha = alpha))+
-  facet_wrap(~ line, ncol = 6)+
+  facet_wrap(~ line, ncol = 4)+
   scale_x_log10(labels = scales::trans_format("log10", scales::math_format(10^.x)))+
   scale_color_manual(values = c("black", "brown2"), guide = "none")+
   theme_bw()+
@@ -290,7 +290,7 @@ pb <- bdf2 %>%
   labs(x = "Mean ancestral TPM",
        y = expression(paste(log[2], "(fold-change)")),
        title = "B")+
-  stat_cor(size = 2.7, label.y.npc = .15, p.accuracy = .01, r.accuracy = .01)+
+  stat_cor(size = 2.6, label.y.npc = .16, p.accuracy = .01, r.accuracy = .01)+
   scale_alpha_manual(values = c(0, 1), guide = "none")
 
 pb

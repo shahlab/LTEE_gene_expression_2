@@ -318,9 +318,9 @@ Save it
 ```{r}
 write_rds(ff, "../../figures/fig_s8.rds")
 
-ggsave(ff, filename = "../../figures/g_fig_s8.pdf", width = 11, height = 9)
+ggsave(ff, filename = "../../figures/fig_s8.pdf", width = 11, height = 9)
 
-ggsave(ff, filename = "../../figures/g_fig_s8.png", width = 11, height = 9)
+ggsave(ff, filename = "../../figures/fig_s8.png", width = 11, height = 9)
 ```
 
 ```{r}

@@ -193,9 +193,9 @@ ff
 
 Save as a pdf and png
 ```{r}
-ggsave(ff, filename = "../../figures/a_fig_s1.pdf", width = 11, height = 8.5)
+ggsave(ff, filename = "../../figures/fig_s1.pdf", width = 11, height = 8.5)
 
-ggsave(ff, filename = "../../figures/a_fig_s1.png", dpi = 300, width = 11, height = 8.5)
+ggsave(ff, filename = "../../figures/fig_s1.png", dpi = 300, width = 11, height = 8.5)
 
 write_rds(ff, "../../figures/fig_s1.rds")
 ```

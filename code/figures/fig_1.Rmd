@@ -669,7 +669,7 @@ rats.bottom <- pdf %>%
   ) +
   scale_x_continuous(breaks = 0:11) +
   labs(x = "Number of lines",
-       y = expression(paste(log[10], "(probability)"))) +
+       y = "Probability") +
   scale_y_log10(labels = trans_format("log10", math_format(10 ^ .x)),
                 breaks = breaks_log(6)) +
   annotate(

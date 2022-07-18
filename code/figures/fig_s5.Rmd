@@ -131,9 +131,9 @@ ff
 
 Save it in various formats
 ```{r}
-ggsave(ff, filename = "../../figures/fig_S5.png", width = 11, height = 8.5)
+ggsave(ff, filename = "../../figures/fig_s5.png", width = 11, height = 8.5)
 
-ggsave(ff, filename = "../../figures/fig_S5.pdf", device = cairo_pdf, width = 11, height = 8.5)
+ggsave(ff, filename = "../../figures/fig_s5.pdf", device = cairo_pdf, width = 11, height = 8.5)
 
 write_rds(ff, "../../figures/fig_s5.rds")
 ```
