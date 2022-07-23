@@ -562,7 +562,7 @@ str_clean_func <- function(x){
     str_remove_all("\\<\\/sup\\>")
 }
 
-ttt <- ttheme_default(core=list(fg_params=list(hjust=0, x=.01, cex = .9)),
+ttt <- ttheme_default(core=list(fg_params=list(hjust=0, x=.01, cex = .7)),
                       rowhead=list(fg_params=list(hjust=0, x=0)))
 
 table.title <- textGrob("G",gp=gpar(fontsize=17))
@@ -617,7 +617,7 @@ top <- (pa | pb | pc.full)
 
 middle <- (pd | pe | pf.full) + plot_layout(widths = c(.38, .32, .3))
 
-bottom <- (plot_spacer() | t1 | plot_spacer() | t2) + plot_layout(widths = c(.01, .4, .2, .4))
+bottom <- (plot_spacer() | t1 | t2) + plot_layout(widths = c(.01, .4, .6))
 
 (ff <- (top / middle / bottom) + plot_layout(heights = c(.325, .325, .34)))
 ```
